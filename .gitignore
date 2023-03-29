@@ -4,4 +4,6 @@
 
 build/
 dist/
-*scoob_psf.egg-info/
+scoobpsf.egg-info/
+
+scoob-opds/*
