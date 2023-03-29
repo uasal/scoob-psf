@@ -1,0 +1,7 @@
+# Ignore all unnecessary files for installation in a specific environment
+*__pycache__/
+*.ipynb_checkpoints/
+
+build/
+dist/
+*scoob_psf.egg-info/
