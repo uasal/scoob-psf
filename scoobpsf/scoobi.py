@@ -18,8 +18,9 @@ try:
     from purepyindi import INDIClient, SwitchState
     client = INDIClient('localhost', 7624)
     client.start()
-except:
-    print('Could not import scoobpy.')
+    print('Succesfully initialized testbed interface.')
+except ImportError:
+    print('Could not import scoobpy. Testbed interface unavailable.')
     scoobpy_avail = False
 
 def set_texp(texp):

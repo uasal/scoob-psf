@@ -1,41 +1,51 @@
 import numpy as np
-import astropy.units as u
-from astropy.constants import h, c
-from astropy.io import fits
-from pathlib import Path
-import pickle
-import time
-import copy
 
 import poppy
+if poppy.accel_math._USE_CUPY:
+    import cupy as cp
+    import cupyx.scipy
+    xp = cp
+    _scipy = cupyx.scipy
+else:
+    xp = np
+    _scipy = scipy
+    
+import astropy.units as u
+from astropy.io import fits
+import matplotlib.pyplot as plt
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+import time
+import copy
 
 from poppy.poppy_core import PlaneType
 pupil = PlaneType.pupil
 inter = PlaneType.intermediate
 image = PlaneType.image
 
-import cupy as cp
-import cupyx.scipy.ndimage
+import os
+from pathlib import Path
+
+import scoobpsf
+module_path = Path(os.path.dirname(os.path.abspath(scoobpsf.__file__)))
 
 class SCOOBM():
 
     def __init__(self, 
                  wavelength=None, 
-                 npix=64, 
-                 oversample=64,
-                 npsf=64,
+                 npix=128, 
+                 oversample=2048/128,
+                 npsf=400,
                  psf_pixelscale=4.63e-6*u.m/u.pix,
                  psf_pixelscale_lamD=None,
-                 interp_order=3,
+                 norm='first',
+                 imnorm=1,
                  det_rotation=0,
-                 offset=(0,0),  
+                 offset=(0,0),
                  use_opds=False,
                  use_aps=False,
-                 fpm_defocus=0,
-                 dm_ref=np.zeros((34,34)),
-                 dm_inf='inf.fits', # or 'proper_inf_func.fits'
-                 im_norm=None,
+                 inf_fun=None,
                  OPD=None,
+                 RETRIEVED=None,
                  FPM=None,
                  LYOT=None):
         
@@ -43,7 +53,9 @@ class SCOOBM():
         
         self.is_model = True
         
+        self.pupil_diam = 6.75*u.mm
         self.wavelength_c = 632.8e-9*u.m
+        
         if wavelength is None: 
             self.wavelength = self.wavelength_c
         else: 
@@ -51,37 +63,32 @@ class SCOOBM():
         
         self.npix = npix
         self.oversample = oversample
+        self.n = int(self.npix*self.oversample)
         
         self.npsf = npsf
         if psf_pixelscale_lamD is None: # overrides psf_pixelscale this way
             self.psf_pixelscale = psf_pixelscale
-            self.psf_pixelscale_lamD = (1/2.75) * self.psf_pixelscale.to(u.m/u.pix).value/4.63e-6
+            self.psf_pixelscale_lamD = (1/(5)) * self.psf_pixelscale.to(u.m/u.pix).value/4.63e-6
         else:
             self.psf_pixelscale_lamD = psf_pixelscale_lamD
-            self.psf_pixelscale = 4.63e-6*u.m/u.pix / self.psf_pixelscale_lamD/(1/2.75)
-            
-        self.interp_order = interp_order
-        self.det_rotation = det_rotation
+            self.psf_pixelscale = 4.63e-6*u.m/u.pix / self.psf_pixelscale_lamD/(1/5)
         
-        self.dm_inf = dm_inf
+        self.det_rotation = det_rotation
+        self.norm = norm # specifies input wavefront normalization, see POPPY for more details
+        self.imnorm = imnorm # image normalization factor
         
         self.offset = offset
         self.use_opds = use_opds
         self.use_aps = use_aps
-        self.fpm_defocus = fpm_defocus
         
         self.OPD = poppy.ScalarTransmission(name='OPD Place-holder') if OPD is None else OPD
+        self.RETRIEVED = poppy.ScalarTransmission(name='Phase Retrieval Place-holder') if RETRIEVED is None else RETRIEVED
         self.FPM = poppy.ScalarTransmission(name='FPM Place-holder') if FPM is None else FPM
-        self.LYOT = poppy.ScalarTransmission(name='FPM Place-holder') if LYOT is None else LYOT
+        self.LYOT = poppy.ScalarTransmission(name='Lyot Stop Place-holder') if LYOT is None else LYOT
         
-        self.texp = texp # between 0.1ms (0.0001s) and 0.01s
-        
-        self.im_norm = im_norm
-        
+        self.inf_fun = str(module_path/'inf.fits') if inf_fun is None else inf_fun
         self.init_dm()
-        self.dm_ref = dm_ref
-        if self.use_opds:
-            self.init_opds()
+        self.init_opds()
         
     def getattr(self, attr):
         return getattr(self, attr)
@@ -94,11 +101,11 @@ class SCOOBM():
         
         self.full_stroke = 1.5e-6*u.m
         
-        self.dm_mask = np.ones((self.Nact,self.Nact))
+        self.dm_mask = np.ones((self.Nact,self.Nact), dtype=bool)
         xx = (np.linspace(0, self.Nact-1, self.Nact) - self.Nact/2 + 1/2) * self.act_spacing.to(u.mm).value*2
         x,y = np.meshgrid(xx,xx)
         r = np.sqrt(x**2 + y**2)
-        self.dm_mask[r>10.5] = 0
+        self.dm_mask[r>10.5] = 0 # had to set the threshold to 10.5 instead of 10.2 to include edge actuators
         
         self.dm_zernikes = poppy.zernike.arbitrary_basis(cp.array(self.dm_mask), nterms=15, outside=0).get()
         
@@ -106,10 +113,10 @@ class SCOOBM():
         self.bad_acts = []
         for act in bad_acts:
             self.bad_acts.append(act[1]*self.Nact + act[0])
-        
+
         self.DM = poppy.ContinuousDeformableMirror(dm_shape=(self.Nact,self.Nact), name='DM', 
                                                    actuator_spacing=self.act_spacing, 
-                                                   influence_func=str(esc_coro_suite.data_dir/self.dm_inf),
+                                                   influence_func=self.inf_fun,
                                                   )
         
     def reset_dm(self):
@@ -123,6 +130,45 @@ class SCOOBM():
         
     def get_dm(self):
         return self.DM.surface.get()
+    
+    def show_dm(self):
+        wf = poppy.FresnelWavefront(beam_radius=self.dm_active_diam/2, npix=self.npix, oversample=1)
+        dm_command = self.get_dm()
+        dm_surface = self.DM.get_opd(wf).get() if poppy.accel_math._USE_CUPY else self.DM.get_opd(wf)
+        surf_ext = wf.pixelscale.to_value(u.mm/u.pix)*self.npix/2
+        
+        fig,ax = plt.subplots(nrows=1, ncols=2, figsize=(8,4), dpi=125)
+        im = ax[0].imshow(dm_command)
+        ax[0].set_title('DM Command')
+        divider = make_axes_locatable(ax[0])
+        cax = divider.append_axes("right", size="4%", pad=0.075)
+        fig.colorbar(im, cax=cax)
+        
+        im = ax[1].imshow(dm_surface, extent=[-surf_ext, surf_ext, -surf_ext, surf_ext])
+        ax[1].set_title('DM Surface')
+        ax[1].set_xlabel('mm')
+        divider = make_axes_locatable(ax[1])
+        cax = divider.append_axes("right", size="4%", pad=0.075)
+        fig.colorbar(im, cax=cax)
+        
+        plt.subplots_adjust(wspace=0.3)
+    
+    def init_inwave(self):
+        self.pupil_diam = 6.8*u.mm
+        
+        inwave = poppy.FresnelWavefront(beam_radius=self.pupil_diam/2, wavelength=self.wavelength,
+                                        npix=self.npix, oversample=self.oversample)
+        self.inwave = inwave
+        
+    def init_opds(self):
+        opd_dir = Path(os.path.dirname(str(module_path)))/'scoob-opds'
+        
+        self.m3_opd = poppy.FITSOpticalElement(opd=str(opd_dir/'M3.fits'), opdunits='meters', planetype=inter)
+        self.oap1_opd = poppy.FITSOpticalElement(opd=str(opd_dir/'OAP1.fits'), opdunits='meters', planetype=inter)
+        self.oap2_opd = poppy.FITSOpticalElement(opd=str(opd_dir/'OAP2.fits'), opdunits='meters', planetype=inter)
+        self.oap3_opd = poppy.FITSOpticalElement(opd=str(opd_dir/'OAP3.fits'), opdunits='meters', planetype=inter)
+        self.flat1_opd = poppy.FITSOpticalElement(opd=str(opd_dir/'FLAT1.fits'), opdunits='meters', planetype=inter)
+        self.flat2_opd = poppy.FITSOpticalElement(opd=str(opd_dir/'FLAT2.fits'), opdunits='meters', planetype=inter)
     
     def oaefl(self, roc, oad, k=-1):
         """
@@ -138,39 +184,41 @@ class SCOOBM():
         return roc/2 + sag
     
     def init_fosys(self):
-        d_pinhole_oap0 = 150.48644122948647*u.mm
-        d_oap0_fsm = 145.538687829754*u.mm
-        d_fsm_flat = 42.522683120520355*u.mm
+        
+        OPD = poppy.ScalarTransmission() if self.OPD is None else self.OPD
+        RETRIEVED = poppy.ScalarTransmission() if self.RETRIEVED is None else self.RETRIEVED
+        FPM = poppy.ScalarTransmission() if self.FPM is None else self.FPM
+        LYOT = poppy.ScalarTransmission() if self.LYOT is None else self.LYOT
+        
+        d_pupil_stop_flat = 42.522683120520355*u.mm
         d_flat_oap1 = 89.33864507546247*u.mm
         d_oap1_oap2 = 307.2973451416505*u.mm
-        d_oap2_DM = 168.84723167004802*u.mm
-#         d_DM_oap3 = 460.43684751808945*u.mm
-        d_DM_oap3 = 462.6680664924039*u.mm
-#         d_oap3_FPM = 462.6680664924039*u.mm - 12*u.mm + 1.304*u.mm + self.fpm_defocus # ZEMAX required defocus term of 7mm
-#         d_FPM_flat2 = 144.6375029385836*u.mm - 1.304*u.mm - self.fpm_defocus
-        d_oap3_FPM = 462.6680664924039*u.mm - 12*u.mm + self.fpm_defocus # ZEMAX required defocus term of 7mm
-        d_FPM_flat2 = 144.6375029385836*u.mm - self.fpm_defocus
-        d_flat2_lens = 200*u.mm - 144.6375*u.mm
+        d_oap2_DM = 168.84723167004802*u.mm + 0*u.mm
+        d_DM_oap3 = 460.43684751808945*u.mm
+#         d_DM_oap3 = 462.6680664924039*u.mm
+        d_oap3_FPM = 462.6680664924039*u.mm
+        d_FPM_flat2 = 144.6375029385836*u.mm 
+        d_flat2_lens = 200*u.mm - 144.6375029385836*u.mm
         d_lens_LYOT = 200*u.mm
 #         d_LYOT_scicam = 75*u.mm
 #         d_scicam_image = 75*u.mm
         d_LYOT_scicam = 150*u.mm
         d_scicam_image = 150*u.mm
-        
+
         fl_oap0 = self.oaefl(293.6,27)*u.mm
         fl_oap1 = self.oaefl(254,40)*u.mm
         fl_oap2 = self.oaefl(346,55)*u.mm
         fl_oap3 = self.oaefl(914.4,100)*u.mm
+#         print(fl_oap0, fl_oap1, fl_oap2, fl_oap3)
+
         fl_lens = 200*u.mm
 #         fl_scicam_lens = 75*u.mm
         fl_scicam_lens = 150*u.mm
         
         # define optics 
         one_inch = poppy.CircularAperture(radius=25.4*u.mm/2, name='1in Aperture', gray_pixel=False)
-        half_inch = poppy.CircularAperture(radius=25.4/2*u.mm/2, name='1in Aperture', gray_pixel=False)
         
-        oap0 = poppy.QuadraticLens(fl_oap0, name='OAP0')
-        pupil_stop  = poppy.CircularAperture(radius=6.8*u.mm/2, name='Pupil Stop/FSM')
+        pupil_stop  = poppy.CircularAperture(radius=self.pupil_diam/2, name='Pupil Stop/FSM')
         flat1 = poppy.CircularAperture(radius=12.7*u.mm/2, name='Flat 1')
         oap1 = poppy.QuadraticLens(fl_oap1, name='OAP1')
         oap2 = poppy.QuadraticLens(fl_oap2, name='OAP2')
@@ -182,27 +230,13 @@ class SCOOBM():
         scicam_lens = poppy.QuadraticLens(fl_scicam_lens, name='Science Lens')
         
         # define FresnelOpticalSystem and add optics
-#         fosys = poppy.FresnelOpticalSystem(pupil_diameter=self.pupil_diam, npix=self.npix, beam_ratio=1/self.oversample)
-#         fiber_input = poppy.CompoundAnalyticOptic(opticslist=[poppy.GaussianAperture(fwhm=2*0.85*self.inwave.w_0),
-#                                                               poppy.CircularAperture(radius=self.inwave.w_0*4),
-#                                                              ])
-#         fosys.add_optic(fiber_input)
-        
-#         fosys.add_optic(oap0, distance=d_pinhole_oap0-0*u.mm)
-#         fosys.add_optic(half_inch)
-#         if self.use_opds: fosys.add_optic(self.m3_opd)
-        
-#         fosys.add_optic(pupil_stop, distance=d_oap0_fsm)
-#         if self.use_opds: fosys.add_optic(self.flat1_opd)
-#         fosys.add_optic(self.OPD)
-        
-        self.pupil_diam = 6.8*u.mm
         fosys = poppy.FresnelOpticalSystem(pupil_diameter=self.pupil_diam, npix=self.npix, beam_ratio=1/self.oversample)
+        
         fosys.add_optic(pupil_stop)
         if self.use_opds: fosys.add_optic(self.flat1_opd)
-        fosys.add_optic(self.OPD)
-
-        fosys.add_optic(flat1, distance=d_fsm_flat)
+        fosys.add_optic(OPD)
+        
+        fosys.add_optic(flat1, distance=d_pupil_stop_flat)
         if self.use_opds: fosys.add_optic(self.flat2_opd)
         
         fosys.add_optic(oap1, distance=d_flat_oap1)
@@ -213,16 +247,17 @@ class SCOOBM():
         if self.use_aps: fosys.add_optic(one_inch)
         if self.use_opds: fosys.add_optic(self.oap2_opd)
         
-#         fosys.add_optic(poppy.ScalarTransmission(name='DM placeholder'), distance=d_oap2_DM)
         fosys.add_optic(self.DM, distance=d_oap2_DM)
         if self.use_aps: fosys.add_optic(DM_aperture)
-#         if self.use_opds: fosys.add_optic(self.dm_opd)
+            
+        fosys.add_optic(RETRIEVED)
 
         fosys.add_optic(oap3, distance=d_DM_oap3)
         if self.use_aps: fosys.add_optic(one_inch)
         if self.use_opds: fosys.add_optic(self.oap3_opd)
         
-        fosys.add_optic(self.FPM, distance=d_oap3_FPM)
+        fosys.add_optic(FPM, distance=d_oap3_FPM)
+        # fosys.add_optic(poppy.InverseTransmission(poppy.CircularAperture(radius=19*u.um/2)) )
         
         fosys.add_optic(flat2, distance=d_FPM_flat2)
         if self.use_aps: fosys.add_optic(one_inch)
@@ -231,141 +266,58 @@ class SCOOBM():
         if self.use_aps: fosys.add_optic(one_inch)
         
         fosys.add_optic(lyot_plane, distance=d_lens_LYOT)
-        fosys.add_optic(self.LYOT)
+        fosys.add_optic(LYOT)
         
         fosys.add_optic(scicam_lens, distance=d_LYOT_scicam)
         if self.use_aps: fosys.add_optic(one_inch)
         
-        fosys.add_optic(poppy.ScalarTransmission(), distance=d_scicam_image)
+#         fosys.add_optic(poppy.ScalarTransmission(), distance=d_scicam_image)
+        fosys.add_detector(pixelscale=self.psf_pixelscale.to(u.m/u.pix), fov_pixels=self.npsf, distance=d_scicam_image)
         
         self.fosys = fosys
-        
-    def init_opds(self):
-        opd_dir = esc_coro_suite.data_dir/'scoob-opds'
-        
-        self.m3_opd = poppy.FITSOpticalElement(opd=str(opd_dir/'M3.fits'), opdunits='meters', planetype=inter)
-        self.oap1_opd = poppy.FITSOpticalElement(opd=str(opd_dir/'OAP1.fits'), opdunits='meters', planetype=inter)
-        self.oap2_opd = poppy.FITSOpticalElement(opd=str(opd_dir/'OAP2.fits'), opdunits='meters', planetype=inter)
-        self.oap3_opd = poppy.FITSOpticalElement(opd=str(opd_dir/'OAP3.fits'), opdunits='meters', planetype=inter)
-        self.flat1_opd = poppy.FITSOpticalElement(opd=str(opd_dir/'FLAT1.fits'), opdunits='meters', planetype=inter)
-        self.flat2_opd = poppy.FITSOpticalElement(opd=str(opd_dir/'FLAT2.fits'), opdunits='meters', planetype=inter)
-    
-    def init_inwave(self):
-        self.pupil_diam = 0.020*u.mm
-        
-        inwave = poppy.FresnelWavefront(beam_radius=self.pupil_diam/2, wavelength=self.wavelength,
-                                        npix=self.npix, oversample=self.oversample)
-        
-        inwave.w_0 = 5e-6*u.m/2
-#         inwave.w_0 = 5e-6*u.m
-        
-        self.inwave = inwave
     
     def calc_wfs(self, quiet=False):
         start = time.time()
         if not quiet: print('Propagating wavelength {:.3f}.'.format(self.wavelength.to(u.nm)))
-        self.init_inwave()
         self.init_fosys()
-        psf, wfs = self.fosys.calc_psf(inwave=self.inwave, return_intermediates=True)
-#         psf, wfs = self.fosys.calc_psf(return_intermediates=True)
-
-        if not self.use_opds and not self.use_aps:
-            self.fosys_names = [
-                                'Fiber Input', 
-                                'OAP0/M3', 'OAP0 Aperture',
-                                'Pupil Stop', 'Injected OPD', 'Flat 1', 'OAP1', 'OAP2',
-                                'DM', 'OAP3',
-                                'FPM', 'Flat 2', 'Lens',  
-                                'Lyot Plane', 'Lyot Stop',
-                                'SciCam Lens', 'Image Plane']
-        elif self.use_opds and not self.use_aps:
-            self.fosys_names = ['Fiber Input', 
-                                'OAP0/M3', 'OAP0 Aperture', 'M3 OPD',
-                                'Pupil Stop', 'Flat 1 OPD', 'Injected OPD', 'Flat 1', 'Flat 2 OPD', 
-                                'OAP1', 'OAP1 OPD', 'OAP2', 'OAP2 OPD',
-                                'DM', 'OAP3', 'OAP3 OPD',
-                                'FPM', 'Flat 2', 'Lens',  
-                                'Lyot Plane', 'Lyot Stop',
-                                'SciCam Lens', 'Image Plane']
-            
+        self.init_inwave()
+        _, wfs = self.fosys.calc_psf(inwave=self.inwave, normalize=self.norm, return_intermediates=True)
         if not quiet: print('PSF calculated in {:.3f}s'.format(time.time()-start))
+        
+        if abs(self.det_rotation)>0:
+            rotated_wf = self.rotate_wf(wfs[-1])
+            wfs[-1] = rotated_wf
+        wfs[-1].wavefront /= np.sqrt(self.imnorm)
         
         return wfs
     
     def calc_psf(self, quiet=True): # method for getting the PSF in photons
         start = time.time()
         if not quiet: print('Propagating wavelength {:.3f}.'.format(self.wavelength.to(u.nm)))
-        self.init_inwave()
         self.init_fosys()
-        psf, wfs = self.fosys.calc_psf(inwave=self.inwave, return_final=True, return_intermediates=False)
-
-        if self.im_norm is not None:
-            wfs[-1].wavefront *= np.sqrt(self.im_norm)/abs(wfs[-1].wavefront).max()
+        self.init_inwave()
+        _, wfs = self.fosys.calc_psf(inwave=self.inwave, normalize=self.norm, return_final=True, return_intermediates=False)
         if not quiet: print('PSF calculated in {:.3f}s'.format(time.time()-start))
         
-        wavefront = wfs[-1].wavefront
-        wavefront_r = cupyx.scipy.ndimage.rotate(cp.real(wavefront), angle=-self.det_rotation, reshape=False, order=0)
-        wavefront_i = cupyx.scipy.ndimage.rotate(cp.imag(wavefront), angle=-self.det_rotation, reshape=False, order=0)
-        
-        wfs[-1].wavefront = wavefront_r + 1j*wavefront_i
-        
-        resamped_wf = self.interp_wf(wfs[-1])
-        
-        return resamped_wf.get()
+        wf = self.rotate_wf(wfs[-1]) if abs(self.det_rotation)>0 else wfs[-1]
+
+        return wf.wavefront/np.sqrt(self.imnorm)
     
     def snap(self): # method for getting the PSF in photons
-        self.init_inwave()
         self.init_fosys()
-        psf, wfs = self.fosys.calc_psf(inwave=self.inwave, return_intermediates=False, return_final=True)
+        self.init_inwave()
         
-        wavefront = wfs[-1].wavefront
-        wavefront_r = cupyx.scipy.ndimage.rotate(cp.real(wavefront), angle=-self.det_rotation, reshape=False, order=0)
-        wavefront_i = cupyx.scipy.ndimage.rotate(cp.imag(wavefront), angle=-self.det_rotation, reshape=False, order=0)
+        _, wfs = self.fosys.calc_psf(inwave=self.inwave, normalize=self.norm, return_intermediates=False, return_final=True)
         
-        wfs[-1].wavefront = wavefront_r + 1j*wavefront_i
+        wf = self.rotate_wf(wfs[-1]) if abs(self.det_rotation)>0 else wfs[-1]
         
-        resamped_wf = self.interp_wf(wfs[-1])
-        
-        image = (cp.abs(resamped_wf)**2).get()
-        
-        if self.im_norm is not None:
-            image = image/image.max() * self.im_norm
-        
-        return image
+        return wf.intensity/self.imnorm
     
-    def interp_wf(self, wave): # this will interpolate the FresnelWavefront data to match the desired pixelscale
-        n = wave.wavefront.shape[0]
-        xs = (cp.linspace(0, n-1, n))*wave.pixelscale.to(u.m/u.pix).value
+    def rotate_wf(self, wave):
+        wavefront = wave.wavefront
+        wavefront_r = _scipy.ndimage.rotate(xp.real(wavefront), angle=-self.det_rotation, reshape=False, order=1)
+        wavefront_i = _scipy.ndimage.rotate(xp.imag(wavefront), angle=-self.det_rotation, reshape=False, order=1)
         
-        extent = self.npsf*self.psf_pixelscale.to(u.m/u.pix).value
-        for i in range(n):
-            if xs[i+1]>extent:
-                newn = i
-                break
-        newn += 2
-        cropped_wf = misc.pad_or_crop(wave.wavefront, newn)
-
-        wf_xmax = wave.pixelscale.to(u.m/u.pix).value * newn/2
-        x,y = cp.ogrid[-wf_xmax:wf_xmax:cropped_wf.shape[0]*1j,
-                       -wf_xmax:wf_xmax:cropped_wf.shape[1]*1j]
-
-        det_xmax = extent/2
-        newx,newy = cp.mgrid[-det_xmax:det_xmax:self.npsf*1j,
-                               -det_xmax:det_xmax:self.npsf*1j]
-        x0 = x[0,0]
-        y0 = y[0,0]
-        dx = x[1,0] - x0
-        dy = y[0,1] - y0
-
-        ivals = (newx - x0)/dx
-        jvals = (newy - y0)/dy
-
-        coords = cp.array([ivals, jvals])
-
-        resamped_wf = cupyx.scipy.ndimage.map_coordinates(cropped_wf, coords, order=3)
-        m = (wave.pixelscale.to(u.m/u.pix)/self.psf_pixelscale.to(u.m/u.pix)).value
-        resamped_wf /= m
-        
-        return resamped_wf
+        wave.wavefront = (wavefront_r + 1j*wavefront_i)
+        return wave
     
-
