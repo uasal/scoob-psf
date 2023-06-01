@@ -1,3 +1,9 @@
+# from .math_module import xp, _scipy, cupy_avail
+# if cupy_avail:
+#     import cupy as cp
+# else:
+#     cp = False
+
 import numpy as np
 
 import poppy
@@ -8,6 +14,7 @@ if poppy.accel_math._USE_CUPY:
     _scipy = cupyx.scipy
 else:
     xp = np
+    import scipy
     _scipy = scipy
     
 import astropy.units as u
@@ -25,6 +32,7 @@ image = PlaneType.image
 import os
 from pathlib import Path
 
+from . import imshows
 import scoobpsf
 module_path = Path(os.path.dirname(os.path.abspath(scoobpsf.__file__)))
 
@@ -40,7 +48,7 @@ class SCOOBM():
                  norm='first',
                  imnorm=1,
                  det_rotation=0,
-                 offset=(0,0),
+                 source_offset=(0,0),
                  use_opds=False,
                  use_aps=False,
                  inf_fun=None,
@@ -48,8 +56,6 @@ class SCOOBM():
                  RETRIEVED=None,
                  FPM=None,
                  LYOT=None):
-        
-        poppy.accel_math.update_math_settings()
         
         self.is_model = True
         
@@ -63,7 +69,10 @@ class SCOOBM():
         
         self.npix = npix
         self.oversample = oversample
-        self.n = int(self.npix*self.oversample)
+        self.N = int(self.npix*self.oversample)
+        
+        self.as_per_lamD = ((self.wavelength_c/self.pupil_diam)*u.radian).to(u.arcsec)
+        self.source_offset = source_offset
         
         self.npsf = npsf
         if psf_pixelscale_lamD is None: # overrides psf_pixelscale this way
@@ -77,7 +86,6 @@ class SCOOBM():
         self.norm = norm # specifies input wavefront normalization, see POPPY for more details
         self.imnorm = imnorm # image normalization factor
         
-        self.offset = offset
         self.use_opds = use_opds
         self.use_aps = use_aps
         
@@ -89,9 +97,13 @@ class SCOOBM():
         self.inf_fun = str(module_path/'inf.fits') if inf_fun is None else inf_fun
         self.init_dm()
         self.init_opds()
-        
+    
+    # useful for parallelization with ray actors
     def getattr(self, attr):
         return getattr(self, attr)
+    
+    def setattr(self, attr, val):
+        setattr(self, attr, val)
 
     def init_dm(self):
         self.Nact = 34
@@ -107,12 +119,7 @@ class SCOOBM():
         r = np.sqrt(x**2 + y**2)
         self.dm_mask[r>10.5] = 0 # had to set the threshold to 10.5 instead of 10.2 to include edge actuators
         
-        self.dm_zernikes = poppy.zernike.arbitrary_basis(cp.array(self.dm_mask), nterms=15, outside=0).get()
-        
-        bad_acts = [(21,25)]
-        self.bad_acts = []
-        for act in bad_acts:
-            self.bad_acts.append(act[1]*self.Nact + act[0])
+        self.dm_zernikes = poppy.zernike.arbitrary_basis(xp.array(self.dm_mask), nterms=15, outside=0).get()
 
         self.DM = poppy.ContinuousDeformableMirror(dm_shape=(self.Nact,self.Nact), name='DM', 
                                                    actuator_spacing=self.act_spacing, 
@@ -158,6 +165,9 @@ class SCOOBM():
         
         inwave = poppy.FresnelWavefront(beam_radius=self.pupil_diam/2, wavelength=self.wavelength,
                                         npix=self.npix, oversample=self.oversample)
+        
+        if self.source_offset[0]>0 or self.source_offset[1]>0:
+            inwave.tilt(Xangle=self.source_offset[0]*self.as_per_lamD, Yangle=self.source_offset[1]*self.as_per_lamD)
         self.inwave = inwave
         
     def init_opds(self):
@@ -249,7 +259,7 @@ class SCOOBM():
         
         fosys.add_optic(self.DM, distance=d_oap2_DM)
         if self.use_aps: fosys.add_optic(DM_aperture)
-            
+        
         fosys.add_optic(RETRIEVED)
 
         fosys.add_optic(oap3, distance=d_DM_oap3)
@@ -271,7 +281,6 @@ class SCOOBM():
         fosys.add_optic(scicam_lens, distance=d_LYOT_scicam)
         if self.use_aps: fosys.add_optic(one_inch)
         
-#         fosys.add_optic(poppy.ScalarTransmission(), distance=d_scicam_image)
         fosys.add_detector(pixelscale=self.psf_pixelscale.to(u.m/u.pix), fov_pixels=self.npsf, distance=d_scicam_image)
         
         self.fosys = fosys
@@ -291,27 +300,29 @@ class SCOOBM():
         
         return wfs
     
-    def calc_psf(self, quiet=True): # method for getting the PSF in photons
-        start = time.time()
-        if not quiet: print('Propagating wavelength {:.3f}.'.format(self.wavelength.to(u.nm)))
+    def calc_psf(self, plot=False,): 
         self.init_fosys()
         self.init_inwave()
         _, wfs = self.fosys.calc_psf(inwave=self.inwave, normalize=self.norm, return_final=True, return_intermediates=False)
-        if not quiet: print('PSF calculated in {:.3f}s'.format(time.time()-start))
-        
-        wf = self.rotate_wf(wfs[-1]) if abs(self.det_rotation)>0 else wfs[-1]
 
-        return wf.wavefront/np.sqrt(self.imnorm)
+        wf = self.rotate_wf(wfs[-1]) if abs(self.det_rotation)>0 else wfs[-1]
+        psf = wf.wavefront/np.sqrt(self.imnorm)
+        if plot:
+            imshows.imshow2(xp.abs(psf), xp.angle(psf), lognorm1=True, pxscl=self.psf_pixelscale_lamD)
+            
+        return psf
     
-    def snap(self): # method for getting the PSF in photons
+    def snap(self, plot=False):
         self.init_fosys()
         self.init_inwave()
         
         _, wfs = self.fosys.calc_psf(inwave=self.inwave, normalize=self.norm, return_intermediates=False, return_final=True)
         
         wf = self.rotate_wf(wfs[-1]) if abs(self.det_rotation)>0 else wfs[-1]
-        
-        return wf.intensity/self.imnorm
+        im = wf.intensity/self.imnorm
+        if plot:
+            imshows.imshow1(im, lognorm=True, pxscl=self.psf_pixelscale_lamD)
+        return im
     
     def rotate_wf(self, wave):
         wavefront = wave.wavefront
