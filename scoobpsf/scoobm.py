@@ -52,6 +52,7 @@ class SCOOBM():
                  use_opds=False,
                  use_aps=False,
                  inf_fun=None,
+                 dm_ref=np.zeros((34,34)),
                  OPD=None,
                  RETRIEVED=None,
                  FPM=None,
@@ -96,6 +97,8 @@ class SCOOBM():
         
         self.inf_fun = str(module_path/'inf.fits') if inf_fun is None else inf_fun
         self.init_dm()
+        self.dm_ref = dm_ref
+        self.set_dm(dm_ref)
         self.init_opds()
     
     # useful for parallelization with ray actors
@@ -127,7 +130,10 @@ class SCOOBM():
                                                   )
         
     def reset_dm(self):
-        self.set_dm(np.zeros((self.Nact,self.Nact)))
+        self.set_dm(self.dm_ref)
+    
+    def zero_dm(self):
+        self.set_dm(np.zeros((34,34)))
         
     def set_dm(self, dm_command):
         self.DM.set_surface(dm_command)
