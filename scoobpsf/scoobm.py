@@ -50,6 +50,7 @@ class SCOOBM():
                  det_rotation=0,
                  source_offset=(0,0),
                  use_opds=False,
+                 use_pupil_grating=False,
                  use_aps=False,
                  inf_fun=None,
                  dm_ref=np.zeros((34,34)),
@@ -88,6 +89,7 @@ class SCOOBM():
         self.imnorm = imnorm # image normalization factor
         
         self.use_opds = use_opds
+        self.use_pupil_grating = use_pupil_grating
         self.use_aps = use_aps
         
         self.OPD = poppy.ScalarTransmission(name='OPD Place-holder') if OPD is None else OPD
@@ -186,6 +188,25 @@ class SCOOBM():
         self.flat1_opd = poppy.FITSOpticalElement(opd=str(opd_dir/'FLAT1.fits'), opdunits='meters', planetype=inter)
         self.flat2_opd = poppy.FITSOpticalElement(opd=str(opd_dir/'FLAT2.fits'), opdunits='meters', planetype=inter)
     
+    
+    def init_pupil_grating(self):
+        wf = poppy.FresnelWavefront(beam_radius=self.pupil_diam/2, npix=self.npix, oversample=1)
+        ap = poppy.CircularAperture(radius=self.pupil_diam/2).get_transmission(wf)
+        
+        grating_period = self.pupil_diam.to(u.m)/32
+        grating_period_pix = grating_period.to_value(u.m)/wf.pixelscale.to_value(u.m/u.pix)
+        grating_period_pix = round(grating_period_pix/2)*2
+#         print(grating_period_pix)
+
+        gwf = poppy.FresnelWavefront(beam_radius=grating_period, npix=grating_period_pix, oversample=1)
+        grating_obs = poppy.InverseTransmission(poppy.CircularAperture(radius=50*u.um)).get_transmission(gwf)
+
+        nobs = self.npix//grating_period_pix
+
+        grating = poppy.utils.pad_or_crop_to_shape(xp.tile(grating_obs, (nobs,nobs)), (self.npix, self.npix))*ap
+
+        self.PUPIL_GRATING = poppy.ArrayOpticalElement(transmission=grating, pixelscale=wf.pixelscale)
+        
     def oaefl(self, roc, oad, k=-1):
         """
         roc: float
@@ -250,6 +271,9 @@ class SCOOBM():
         
         fosys.add_optic(pupil_stop)
         if self.use_opds: fosys.add_optic(self.flat1_opd)
+        if self.use_pupil_grating:
+            self.init_pupil_grating()
+            fosys.add_optic(self.PUPIL_GRATING)
         fosys.add_optic(OPD)
         
         fosys.add_optic(flat1, distance=d_pupil_stop_flat)
