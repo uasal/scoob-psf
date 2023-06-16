@@ -13,13 +13,9 @@ from poppy.fresnel import FresnelWavefront
 from poppy import utils
 
 import numpy as np
-
-poppy.accel_math.update_math_settings()
-global xp
-from poppy.accel_math import xp
-
 import astropy.units as u
 
+from .math_module import xp,_scipy
 
 class IdealAGPM(poppy.AnalyticOpticalElement):
     """ Defines an ideal vortex phase mask coronagraph.
@@ -38,10 +34,6 @@ class IdealAGPM(poppy.AnalyticOpticalElement):
                  charge=2,
                  singularity=None,
                  **kwargs):
-        
-        poppy.accel_math.update_math_settings()
-        global xp
-        from poppy.accel_math import xp
         
         poppy.AnalyticOpticalElement.__init__(self, planetype=PlaneType.intermediate, **kwargs)
         self.name = name
@@ -84,6 +76,7 @@ class IdealAGPM(poppy.AnalyticOpticalElement):
         else:
             circ = poppy.InverseTransmission(poppy.CircularAperture(radius=self.singularity/2))
             trans = circ.get_transmission(wave)
+            
         return trans
     
     

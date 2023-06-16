@@ -1,40 +1,22 @@
-# from .math_module import xp, _scipy, cupy_avail
-# if cupy_avail:
-#     import cupy as cp
-# else:
-#     cp = False
-
 import numpy as np
-
-import poppy
-if poppy.accel_math._USE_CUPY:
-    import cupy as cp
-    import cupyx.scipy
-    xp = cp
-    _scipy = cupyx.scipy
-else:
-    xp = np
-    import scipy
-    _scipy = scipy
-    
 import astropy.units as u
 from astropy.io import fits
-import matplotlib.pyplot as plt
-from mpl_toolkits.axes_grid1 import make_axes_locatable
 import time
 import copy
+import os
+from pathlib import Path
 
+from .math_module import xp,_scipy
+from . import imshows
+import scoobpsf
+module_path = Path(os.path.dirname(os.path.abspath(scoobpsf.__file__)))
+
+import poppy
 from poppy.poppy_core import PlaneType
 pupil = PlaneType.pupil
 inter = PlaneType.intermediate
 image = PlaneType.image
 
-import os
-from pathlib import Path
-
-from . import imshows
-import scoobpsf
-module_path = Path(os.path.dirname(os.path.abspath(scoobpsf.__file__)))
 
 class SCOOBM():
 
@@ -50,6 +32,7 @@ class SCOOBM():
                  det_rotation=0,
                  source_offset=(0,0),
                  use_opds=False,
+                 use_zwfs=False,
                  use_pupil_grating=False,
                  use_aps=False,
                  inf_fun=None,
@@ -89,6 +72,8 @@ class SCOOBM():
         self.imnorm = imnorm # image normalization factor
         
         self.use_opds = use_opds
+        self.use_zwfs = use_zwfs
+        self.ZWFS = None
         self.use_pupil_grating = use_pupil_grating
         self.use_aps = use_aps
         
@@ -232,13 +217,10 @@ class SCOOBM():
         d_oap1_oap2 = 307.2973451416505*u.mm
         d_oap2_DM = 168.84723167004802*u.mm + 0*u.mm
         d_DM_oap3 = 460.43684751808945*u.mm
-#         d_DM_oap3 = 462.6680664924039*u.mm
         d_oap3_FPM = 462.6680664924039*u.mm
         d_FPM_flat2 = 144.6375029385836*u.mm 
         d_flat2_lens = 200*u.mm - 144.6375029385836*u.mm
         d_lens_LYOT = 200*u.mm
-#         d_LYOT_scicam = 75*u.mm
-#         d_scicam_image = 75*u.mm
         d_LYOT_scicam = 150*u.mm
         d_scicam_image = 150*u.mm
 
@@ -246,10 +228,8 @@ class SCOOBM():
         fl_oap1 = self.oaefl(254,40)*u.mm
         fl_oap2 = self.oaefl(346,55)*u.mm
         fl_oap3 = self.oaefl(914.4,100)*u.mm
-#         print(fl_oap0, fl_oap1, fl_oap2, fl_oap3)
-
+        print(fl_oap3)
         fl_lens = 200*u.mm
-#         fl_scicam_lens = 75*u.mm
         fl_scicam_lens = 150*u.mm
         
         # define optics 
@@ -267,6 +247,7 @@ class SCOOBM():
         scicam_lens = poppy.QuadraticLens(fl_scicam_lens, name='Science Lens')
         
         # define FresnelOpticalSystem and add optics
+        self.N = int(self.npix*self.oversample)
         fosys = poppy.FresnelOpticalSystem(pupil_diameter=self.pupil_diam, npix=self.npix, beam_ratio=1/self.oversample)
         
         fosys.add_optic(pupil_stop)
@@ -296,6 +277,20 @@ class SCOOBM():
         if self.use_aps: fosys.add_optic(one_inch)
         if self.use_opds: fosys.add_optic(self.oap3_opd)
         
+        if self.use_zwfs:
+            ZWFS = poppy.ScalarTransmission(name='Intermediate Focal Plane') if self.ZWFS is None else self.ZWFS
+            fosys.add_optic(ZWFS, distance=d_oap3_FPM)
+            
+            fl_zwfs_lens = 75*u.mm
+            zwfs_lens = poppy.QuadraticLens(fl_zwfs_lens)
+            fosys.add_optic(zwfs_lens, distance=fl_zwfs_lens)
+            
+            self.zwfs_pixelscale = 5*u.um/u.pix
+            self.nzwfs = 400
+            fosys.add_detector(pixelscale=self.zwfs_pixelscale.to(u.m/u.pix), fov_pixels=self.nzwfs, distance=fl_zwfs_lens)
+        
+            return fosys
+        
         fosys.add_optic(FPM, distance=d_oap3_FPM)
         # fosys.add_optic(poppy.InverseTransmission(poppy.CircularAperture(radius=19*u.um/2)) )
         
@@ -313,14 +308,14 @@ class SCOOBM():
         
         fosys.add_detector(pixelscale=self.psf_pixelscale.to(u.m/u.pix), fov_pixels=self.npsf, distance=d_scicam_image)
         
-        self.fosys = fosys
+        return fosys
     
     def calc_wfs(self, quiet=False):
         start = time.time()
         if not quiet: print('Propagating wavelength {:.3f}.'.format(self.wavelength.to(u.nm)))
-        self.init_fosys()
+        fosys = self.init_fosys()
         self.init_inwave()
-        _, wfs = self.fosys.calc_psf(inwave=self.inwave, normalize=self.norm, return_intermediates=True)
+        _, wfs = fosys.calc_psf(inwave=self.inwave, normalize=self.norm, return_intermediates=True)
         if not quiet: print('PSF calculated in {:.3f}s'.format(time.time()-start))
         
         if abs(self.det_rotation)>0:
@@ -331,9 +326,9 @@ class SCOOBM():
         return wfs
     
     def calc_psf(self, plot=False,): 
-        self.init_fosys()
+        fosys = self.init_fosys()
         self.init_inwave()
-        _, wfs = self.fosys.calc_psf(inwave=self.inwave, normalize=self.norm, return_final=True, return_intermediates=False)
+        _, wfs = fosys.calc_psf(inwave=self.inwave, normalize=self.norm, return_final=True, return_intermediates=False)
 
         wf = self.rotate_wf(wfs[-1]) if abs(self.det_rotation)>0 else wfs[-1]
         psf = wf.wavefront/np.sqrt(self.imnorm)
@@ -343,10 +338,10 @@ class SCOOBM():
         return psf
     
     def snap(self, plot=False):
-        self.init_fosys()
+        fosys = self.init_fosys()
         self.init_inwave()
         
-        _, wfs = self.fosys.calc_psf(inwave=self.inwave, normalize=self.norm, return_intermediates=False, return_final=True)
+        _, wfs = fosys.calc_psf(inwave=self.inwave, normalize=self.norm, return_intermediates=False, return_final=True)
         
         wf = self.rotate_wf(wfs[-1]) if abs(self.det_rotation)>0 else wfs[-1]
         im = wf.intensity/self.imnorm

@@ -1,9 +1,4 @@
-from .math_module import xp, _scipy, cupy_avail
-if cupy_avail:
-    import cupy as cp
-else:
-    cp = False
-    
+from .math_module import xp, _scipy
 import numpy as np
 import scipy
 

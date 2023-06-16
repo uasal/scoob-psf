@@ -1,5 +1,6 @@
 import numpy as np
 import scipy
+import poppy
 
 class np_backend:
     """A shim that allows a backend to be swapped at runtime."""
@@ -22,19 +23,17 @@ class scipy_backend:
             return self._srcmodule
 
         return getattr(self._srcmodule, key)
-    
-try:
+
+if poppy.accel_math._USE_CUPY:
     import cupy as cp
     import cupyx.scipy
-#     cp.cuda.Device(0).compute_capability
-    cupy_avail = True
-except ImportError:
-    cupy_avail = False
-    
-xp = np_backend(cp) if cupy_avail else np_backend(np)
-_scipy = scipy_backend(cupyx.scipy) if cupy_avail else scipy_backend(scipy)
+    xp = np_backend(cp)
+    _scipy = scipy_backend(cupyx.scipy)
+else:
+    xp = np_backend(np)
+    _scipy = scipy_backend(scipy)
 
-def update_np(module):
+def update_xp(module):
     xp._srcmodule = module
     
 def update_scipy(module):
