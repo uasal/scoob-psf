@@ -1,4 +1,4 @@
-from .math_module import xp, _scipy
+from .math_module import xp, _scipy, ensure_np_array
 from . import utils
 
 import numpy as np
@@ -26,7 +26,7 @@ def imshow1(arr,
             display_fig=True, return_fig=False):
     fig,ax = plt.subplots(nrows=1, ncols=1, figsize=figsize, dpi=dpi)
     
-    arr = utils.ensure_np_array(arr)
+    arr = ensure_np_array(arr)
     
     if npix is not None:
         arr = utils.pad_or_crop(arr, npix)
@@ -80,8 +80,8 @@ def imshow2(arr1, arr2,
             figsize=(10,4), dpi=125, wspace=0.2):
     fig,ax = plt.subplots(nrows=1, ncols=2, figsize=figsize, dpi=dpi)
     
-    arr1 = utils.ensure_np_array(arr1)
-    arr2 = utils.ensure_np_array(arr2)
+    arr1 = ensure_np_array(arr1)
+    arr2 = ensure_np_array(arr2)
     
     npix1, npix2 = (npix, npix) if npix is not None else (npix1, npix2)
     if npix1 is not None: arr1 = utils.pad_or_crop(arr1, npix1)
@@ -175,9 +175,9 @@ def imshow3(arr1, arr2, arr3,
             figsize=(14,7), dpi=125, wspace=0.3):
     fig,ax = plt.subplots(nrows=1, ncols=3, figsize=figsize, dpi=dpi)
     
-    arr1 = utils.ensure_np_array(arr1)
-    arr2 = utils.ensure_np_array(arr2)
-    arr3 = utils.ensure_np_array(arr3)
+    arr1 = ensure_np_array(arr1)
+    arr2 = ensure_np_array(arr2)
+    arr3 = ensure_np_array(arr3)
     
     npix1, npix2, npix3 = (npix, npix, npix) if npix is not None else (npix1, npix2, npix3)
     if npix1 is not None: arr1 = utils.pad_or_crop(arr1, npix1)
