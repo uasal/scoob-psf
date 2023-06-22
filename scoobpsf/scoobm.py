@@ -6,7 +6,7 @@ import copy
 import os
 from pathlib import Path
 
-from .math_module import xp,_scipy
+from .math_module import xp,_scipy, ensure_np_array
 from . import imshows
 import scoobpsf
 module_path = Path(os.path.dirname(os.path.abspath(scoobpsf.__file__)))
@@ -84,7 +84,7 @@ class SCOOBM():
         
         self.inf_fun = str(module_path/'inf.fits') if inf_fun is None else inf_fun
         self.init_dm()
-        self.dm_ref = dm_ref
+        self.dm_ref = ensure_np_array(dm_ref)
         self.set_dm(dm_ref)
         self.init_opds()
     
@@ -109,7 +109,7 @@ class SCOOBM():
         r = np.sqrt(x**2 + y**2)
         self.dm_mask[r>10.5] = 0 # had to set the threshold to 10.5 instead of 10.2 to include edge actuators
         
-        self.dm_zernikes = poppy.zernike.arbitrary_basis(xp.array(self.dm_mask), nterms=15, outside=0).get()
+        self.dm_zernikes = ensure_np_array(poppy.zernike.arbitrary_basis(xp.array(self.dm_mask), nterms=15, outside=0))
 
         self.DM = poppy.ContinuousDeformableMirror(dm_shape=(self.Nact,self.Nact), name='DM', 
                                                    actuator_spacing=self.act_spacing, 
@@ -123,13 +123,13 @@ class SCOOBM():
         self.set_dm(np.zeros((34,34)))
         
     def set_dm(self, dm_command):
-        self.DM.set_surface(dm_command)
+        self.DM.set_surface(ensure_np_array(dm_command))
         
     def add_dm(self, dm_command):
-        self.DM.set_surface(self.get_dm() + dm_command)
+        self.DM.set_surface(self.get_dm() + ensure_np_array(dm_command))
         
     def get_dm(self):
-        return self.DM.surface.get()
+        return ensure_np_array(self.DM.surface)
     
     def show_dm(self):
         wf = poppy.FresnelWavefront(beam_radius=self.dm_active_diam/2, npix=self.npix, oversample=1)
@@ -181,7 +181,6 @@ class SCOOBM():
         grating_period = self.pupil_diam.to(u.m)/32
         grating_period_pix = grating_period.to_value(u.m)/wf.pixelscale.to_value(u.m/u.pix)
         grating_period_pix = round(grating_period_pix/2)*2
-#         print(grating_period_pix)
 
         gwf = poppy.FresnelWavefront(beam_radius=grating_period, npix=grating_period_pix, oversample=1)
         grating_obs = poppy.InverseTransmission(poppy.CircularAperture(radius=50*u.um)).get_transmission(gwf)
@@ -228,7 +227,7 @@ class SCOOBM():
         fl_oap1 = self.oaefl(254,40)*u.mm
         fl_oap2 = self.oaefl(346,55)*u.mm
         fl_oap3 = self.oaefl(914.4,100)*u.mm
-        print(fl_oap3)
+        
         fl_lens = 200*u.mm
         fl_scicam_lens = 150*u.mm
         
