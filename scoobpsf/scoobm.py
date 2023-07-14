@@ -1,9 +1,11 @@
 import numpy as np
+import cupy as cp
 import astropy.units as u
 from astropy.io import fits
 import time
 import os
 from pathlib import Path
+import ray
 
 from .math_module import xp,_scipy, ensure_np_array
 from . import imshows
@@ -21,10 +23,10 @@ class SCOOBM():
 
     def __init__(self, 
                  bad_acts=0,
-                 wavelength=None, 
+                 wavelength=632.8e-9*u.m, 
                  npix=128, 
                  oversample=2048/128,
-                 npsf=400,
+                 npsf=400, 
                  psf_pixelscale=4.63e-6*u.m/u.pix,
                  psf_pixelscale_lamD=None,
                  norm='first',
@@ -41,6 +43,7 @@ class SCOOBM():
                  RETRIEVED=None,
                  FPM=None,
                  LYOT=None,
+                 pupil_diam=6.75*u.mm,
     ):
         
         '''
@@ -52,13 +55,21 @@ class SCOOBM():
             For example [(23,25), (23,26)] would have bad actuators at Y=23 and X=25&26.
             Bad actuators are eventually masked in the Jacobian and when adding shapes.
             However, this aspect of the functionality is in the lina package.
+
+        npsf: `int`
+            Side length of the detector in pixels.
+
+        npix: `int`
+            Sampling rate at the pupil plane (TBR?)
+
+
         '''
 
         self.bad_acts = None if bad_acts == 0 else bad_acts
         self.is_model = True
         
-        self.pupil_diam = 6.75*u.mm
-        self.wavelength_c = 632.8e-9*u.m
+        self.pupil_diam = pupil_diam
+        self.wavelength_c = wavelength
         
         if wavelength is None: 
             print('No wavelength provided on instantiation. '
@@ -67,7 +78,7 @@ class SCOOBM():
         else: 
             self.wavelength = wavelength
         
-        self.npix = npix
+        self.npix = int(npix)
         self.oversample = oversample
         self.N = int(self.npix*self.oversample)
         
@@ -121,7 +132,7 @@ class SCOOBM():
         
         self.dm_mask = np.ones((self.Nact,self.Nact), dtype=bool)
         # bad actuators are False - a bit confusing but makes 
-        # the code less complex 
+        # the code less complex. 
         self.dm_bad_act_mask = xp.ones((self.Nact,self.Nact), dtype=bool)
 
         xx = (np.linspace(0, self.Nact-1, self.Nact) - self.Nact/2 + 1/2) * self.act_spacing.to(u.mm).value*2
@@ -334,25 +345,61 @@ class SCOOBM():
         return fosys
     
     def calc_wfs(self, quiet=False):
+        '''
+        Propagate through the entire system and return the normalized wavefront
+        for each surface.
+
+        Parameters
+        ----------
+
+        quiet: `bool`
+            Remove informational print statements.
+
+        Returns
+        -------
+
+        wfs: `list`
+            List of poppy.fresnel.FresnelWavefront objects corresponding to 
+            each surface along the optical path.
+        '''
         start = time.time()
-        if not quiet: print('Propagating wavelength {:.3f}.'.format(self.wavelength.to(u.nm)))
+        if not quiet: print(f'Propagating wavelength {self.wavelength.to(u.nm):.3f}.')
         fosys = self.init_fosys()
         self.init_inwave()
         _, wfs = fosys.calc_psf(inwave=self.inwave, normalize=self.norm, return_intermediates=True)
-        if not quiet: print('PSF calculated in {:.3f}s'.format(time.time()-start))
+        if not quiet: print(f'PSF calculated in {(time.time()-start):.3f}s')
         
+        # Rotate the detector image
         if abs(self.det_rotation)>0:
             rotated_wf = self.rotate_wf(wfs[-1])
             wfs[-1] = rotated_wf
+        # Normalize the detector image
         wfs[-1].wavefront /= np.sqrt(self.imnorm)
         
         return wfs
     
     def calc_psf(self, plot=False,): 
         '''
-        This propagates a beam from start to finish and returns the complex wavefront.
-        The calc_psf "notation" comes from poppy.
+        This propagates a beam from start to finish and returns the complex 
+        wavefront.
+        The calc_psf "notation" follows from poppy method naming.
         This is not actually the PSF (meaning modulus(wavefront)^2).
+        
+        The PSF will be normalized by whatever is in the self.imnorm class
+        variable
+
+        Parameters
+        ----------
+
+        plot: `bool`
+            Plot result?
+
+        Returns
+        -------
+
+        psf: `cupy.ndarray`
+            Normalized (optional) wavefront array.
+
         '''
 
         fosys = self.init_fosys()
@@ -360,13 +407,30 @@ class SCOOBM():
         _, wfs = fosys.calc_psf(inwave=self.inwave, normalize=self.norm, return_final=True, return_intermediates=False)
 
         wf = self.rotate_wf(wfs[-1]) if abs(self.det_rotation)>0 else wfs[-1]
+        # Normalize by the unocculted PSF peak, however, this is a wavefront
+        # and the peak is an intensity, so need to take the sqrt
         psf = wf.wavefront/np.sqrt(self.imnorm)
         if plot:
             imshows.imshow2(xp.abs(psf), xp.angle(psf), lognorm1=True, pxscl=self.psf_pixelscale_lamD)
-            
+        
         return psf
     
     def snap(self, plot=False):
+        '''
+        Calculate the and return the PSF intensity.
+
+        Parameters
+        ----------
+
+        plot: `bool`
+            Display a plot of the PSF?
+        
+        Returns
+        -------
+
+        im: `cupy.ndarray`
+            PSF intensity on the focal plane.
+        '''
         fosys = self.init_fosys()
         self.init_inwave()
         
@@ -386,3 +450,222 @@ class SCOOBM():
         wave.wavefront = (wavefront_r + 1j*wavefront_i)
         return wave
     
+class ParallelizedScoob():
+    '''
+    This is a class that sets up the parallelization of calc_psf such that it 
+    we can generate polychromatic wavefronts that are then fed into the 
+    various wavefront simulations.
+    '''
+    def __init__(self, actors, f_lambda):
+
+        print('ParallelizedScoob Initialized!')
+        self.actors = actors
+        self.f_lambda = f_lambda
+
+        # FIXME: Parameters that are in the model but needed higher up
+        self.dm_mask = None
+        self.dm_bad_act_mask = None
+        self.psf_pixelscale_lamD = None
+        self.Nact=None  # required for lina
+    
+    def calc_psfs(self, quiet=True):
+        '''
+        Calculate a psf for each wavelength.
+        This wraps the calc_psf method in the SCOOBM class.
+        Remember that this method returns a wavefront and not a psf.
+
+        Returns
+        -------
+
+        psfs : `array`
+            An array of the wavefronts at each wavelength.
+        '''
+        start = time.time()
+        pending_psfs = []
+        for i in range(len(self.actors)):
+            future_psfs = self.actors[i].calc_psf.remote()
+            pending_psfs.append(future_psfs)
+        psfs = ray.get(pending_psfs)
+        if isinstance(psfs[0], np.ndarray):
+            xp = np
+        elif isinstance(psfs[0], cp.ndarray):
+            xp = cp
+        psfs = xp.array(psfs)
+        
+        if not quiet: print('PSFs calculated in {:.3f}s.'.format(time.time()-start))
+        return psfs
+    
+    def snaps(self):
+        '''
+        Generats a PSF for each actor (which is nominally each wavelength).
+        This wraps the snap method in the SCOOBM class.
+
+        Returns
+        -------
+
+        ims : `array`
+            An array of PSFs with one slice per wavelength.
+        '''
+        pending_ims = []
+        for i in range(len(self.actors)):
+            future_ims = self.actors[i].snap.remote()
+            pending_ims.append(future_ims)
+        ims = ray.get(pending_ims)
+        ims = xp.array(ims)
+            
+        return ims
+
+    def snap(self):
+        '''
+        Generates the PSF which is multiplied the desired flux 
+        level for each wavelength and summed into a single image.
+
+        FIXME: this is not yet implemented. 
+        The goal is to have a single method that generates a polychromatic PSF.
+
+        '''
+        ims = snaps()
+
+        # Creates a 2d array which will be the final PSF
+        im=xp.zeros(ims.shape[1:3])
+
+        # FIXME: this is better done by matrix multiplication and then
+        # summing along an axis (im = xp.sum(ims, axis=0))
+        for s in ims:
+            im = im + (s * self.f_lambda[i])
+
+        # flux_calibrate_psf(self, arr, f_lambda)
+        
+        return NotImplementedError()    
+
+    def set_actor_attr(self, attr, value):
+        '''
+        Sets a value for all actors
+        '''
+        for i in range(len(self.actors)):
+            self.actors[i].setattr.remote(attr,value)
+    
+    def set_dm(self, value):
+        for i in range(len(self.actors)):
+            self.actors[i].set_dm.remote(value)
+
+    def add_dm(self, value):
+        for i in range(len(self.actors)):
+            self.actors[i].add_dm.remote(value)
+
+    def get_dm(self):
+        return ray.get(self.actors[0].get_dm.remote())
+
+    def calc_psf(self, quiet=True):
+        '''
+        Creates a the polychromatic wavefront at the focal plane which is scaled
+        to the desired flux level for each wavelength.
+        It is *not* normalized by the unocculted wavefront.
+        
+        This is the input for the EFC etc.
+
+        Currently, there is no handling of normalization.
+        '''
+
+        # 
+        psfs = self.calc_psfs(quiet=quiet)
+
+        psf = self.flux_calibrate_wavefronts(psfs, self.f_lambda)
+    
+        return psf
+    
+    @classmethod
+    def flux_calibrate_psf(self, arr, f_lambda, norm=None):
+        '''
+        Perform the flux calibration of a 3-Dimensional PSF (intensity) array 
+        based on the desired spectral distributions.
+
+        Parameters
+        ----------
+        
+        arr : `cp.array`
+            Array of psfs
+
+        f_lambda : `list`
+            Array of relative fluxes. This will be normalized such that
+            the integral over the spectral range is 1.
+
+        norm_arr : `cp.array`
+            Optional array of occulted psfs. If provided, then the array will be
+            divided by the maximum of this array. This is useful for putting
+            occulted arrays of psfs into units of contrast.
+        
+        Returns
+        -------
+
+        im : `cp.array`
+            Flux calibrated array which has been normalized by the maximum of 
+            the maximum value of the norm array (if the norm parameter was 
+            provided).
+        
+        f_lambda_norm : `np.array`
+            Normalized flux array.
+
+        '''
+
+        # Set the norm array if it's not defined
+        if norm is None:
+            print('No normalization supplied.')
+            norm=np.ones(len(arr))
+
+        if len(arr) != len(norm):
+            return IOError('length of input array is not of the same length as the normalization array')
+
+        # Normalize the flux array
+        f_lambda_norm = f_lambda/np.sum(f_lambda)
+
+        f_im=xp.zeros((arr.shape[1:3]))
+        f_norm=xp.zeros((arr.shape[1:3]))
+
+        for i in range(len(arr)):
+            f_im += (arr[i]/norm[i].max()) * f_lambda_norm[i]
+            f_norm += (norm[i] * f_lambda_norm[i])
+
+        return  f_im, f_norm
+
+    @classmethod
+    def flux_calibrate_wavefronts(self, arr, f_lambda):
+        '''
+        Perform the flux calibration of a 3-Dimensional array of wavefronts 
+        based on the desired spectral distributions.
+
+        Parameters
+        ----------
+        
+        arr : `cp.array`
+            Array of wavefronts
+
+        f_lambda : `list`
+            Array of relative fluxes. This will be normalized such that
+            the integral over the spectral range is 1.
+        
+        Returns
+        -------
+
+        im : `cp.array`
+            Flux calibrated wavefront.
+        '''
+        if len(arr) != len(f_lambda):
+            return IOError(
+                'length of input array is not of the same length as flux array'
+                )
+
+        # Normalize the flux array
+        f_lambda_norm = f_lambda/xp.sum(f_lambda)
+        # declare the output array
+        f_wfr = xp.zeros((arr.shape[1:3]))
+        
+        for i in range(len(arr)):
+
+            tmp= (arr[i] * f_lambda_norm[i])
+
+            # Not sure why, but doing the following line results in a type error
+            # f_wfr+=tmp
+            f_wfr = f_wfr+tmp
+
+        return  f_wfr
