@@ -2,7 +2,6 @@ import numpy as np
 import astropy.units as u
 from astropy.io import fits
 import time
-import copy
 import os
 from pathlib import Path
 
@@ -21,6 +20,7 @@ image = PlaneType.image
 class SCOOBM():
 
     def __init__(self, 
+                 bad_acts=0,
                  wavelength=None, 
                  npix=128, 
                  oversample=2048/128,
@@ -40,14 +40,29 @@ class SCOOBM():
                  OPD=None,
                  RETRIEVED=None,
                  FPM=None,
-                 LYOT=None):
+                 LYOT=None,
+    ):
         
+        '''
+        Parameters
+        ----------
+        
+        bad_acts: `list`
+            List of 2d tuples that indicate where the bad actuators are. 
+            For example [(23,25), (23,26)] would have bad actuators at Y=23 and X=25&26.
+            Bad actuators are eventually masked in the Jacobian and when adding shapes.
+            However, this aspect of the functionality is in the lina package.
+        '''
+
+        self.bad_acts = None if bad_acts == 0 else bad_acts
         self.is_model = True
         
         self.pupil_diam = 6.75*u.mm
         self.wavelength_c = 632.8e-9*u.m
         
         if wavelength is None: 
+            print('No wavelength provided on instantiation. '
+                  f'Setting wavelength to {self.wavelength_c*1e9:0.1e} nm')
             self.wavelength = self.wavelength_c
         else: 
             self.wavelength = wavelength
@@ -82,6 +97,7 @@ class SCOOBM():
         self.FPM = poppy.ScalarTransmission(name='FPM Place-holder') if FPM is None else FPM
         self.LYOT = poppy.ScalarTransmission(name='Lyot Stop Place-holder') if LYOT is None else LYOT
         
+        # Load influence function
         self.inf_fun = str(module_path/'inf.fits') if inf_fun is None else inf_fun
         self.init_dm()
         self.dm_ref = ensure_np_array(dm_ref)
@@ -104,11 +120,19 @@ class SCOOBM():
         self.full_stroke = 1.5e-6*u.m
         
         self.dm_mask = np.ones((self.Nact,self.Nact), dtype=bool)
+        # bad actuators are False - a bit confusing but makes 
+        # the code less complex 
+        self.dm_bad_act_mask = xp.ones((self.Nact,self.Nact), dtype=bool)
+
         xx = (np.linspace(0, self.Nact-1, self.Nact) - self.Nact/2 + 1/2) * self.act_spacing.to(u.mm).value*2
         x,y = np.meshgrid(xx,xx)
         r = np.sqrt(x**2 + y**2)
         self.dm_mask[r>10.5] = 0 # had to set the threshold to 10.5 instead of 10.2 to include edge actuators
         
+        if self.bad_acts != None:
+            for act in self.bad_acts:
+                self.dm_bad_act_mask[act]=False
+
         self.dm_zernikes = ensure_np_array(poppy.zernike.arbitrary_basis(xp.array(self.dm_mask), nterms=15, outside=0))
 
         self.DM = poppy.ContinuousDeformableMirror(dm_shape=(self.Nact,self.Nact), name='DM', 
@@ -325,6 +349,12 @@ class SCOOBM():
         return wfs
     
     def calc_psf(self, plot=False,): 
+        '''
+        This propagates a beam from start to finish and returns the complex wavefront.
+        The calc_psf "notation" comes from poppy.
+        This is not actually the PSF (meaning modulus(wavefront)^2).
+        '''
+
         fosys = self.init_fosys()
         self.init_inwave()
         _, wfs = fosys.calc_psf(inwave=self.inwave, normalize=self.norm, return_final=True, return_intermediates=False)
