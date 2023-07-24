@@ -5,7 +5,13 @@ from astropy.io import fits
 import time
 import os
 from pathlib import Path
-import ray
+# This is here because I originally thought that we would want to have both the parallelized
+# and SCOOBM classes in the same file. I think we should re-think that based on how we
+# do the refactor. More details below.
+import ray 
+
+#why using the underscore here?
+# Isn't that normally for local variables inside a method?
 
 from .math_module import xp,_scipy, ensure_np_array
 from . import imshows
@@ -21,6 +27,10 @@ image = PlaneType.image
 
 class SCOOBM():
 
+# I think the first big change here is to have all of these keywords 
+# (and any other hard-coded value) be set via a configuration
+# dictionary (yaml file) then pass that file.
+# Defaults can be set by a configuration rather than in the class itself.
     def __init__(self, 
                  bad_acts=0,
                  wavelength=632.8e-9*u.m, 
@@ -109,6 +119,11 @@ class SCOOBM():
         self.LYOT = poppy.ScalarTransmission(name='Lyot Stop Place-holder') if LYOT is None else LYOT
         
         # Load influence function
+
+        # So all OPDs and supporting files should probably not be 
+        # included with the package itself if we can avoid it.
+        # If we do need to do it, then let's make a "data" folder of where to put them.
+        # Then the files being used are declared in the config file.
         self.inf_fun = str(module_path/'inf.fits') if inf_fun is None else inf_fun
         self.init_dm()
         self.dm_ref = ensure_np_array(dm_ref)
@@ -117,12 +132,19 @@ class SCOOBM():
     
     # useful for parallelization with ray actors
     def getattr(self, attr):
+        # I don't understand what this is doing.
+        # why overwrite the built-in function with this?
         return getattr(self, attr)
     
     def setattr(self, attr, val):
+        # I don't understand what this is doing.
+        # why overwrite the built-in function with this?
         setattr(self, attr, val)
 
     def init_dm(self):
+        # All this goes into a config file.
+        # you might consider two config files if it's required
+        # one is the optical system and the other might be simulation parameters etc.
         self.Nact = 34
         self.act_spacing = 300e-6*u.m
         self.dm_active_diam = 10.2*u.mm
@@ -130,7 +152,14 @@ class SCOOBM():
         
         self.full_stroke = 1.5e-6*u.m
         
+        # It is probably worth thinking about a parent class which has all the optical
+        # aspects in it. Then the model of p_model class can inherit it.
+        # this would make it easier to support both the scoobM and p_scoob classes.
+        # option 2 is to just merge scoobM into p_scoob, but this adds a lot of ugly
+        # dependencies, especially if you want to be about to run this package without
+        # cupy.
         self.dm_mask = np.ones((self.Nact,self.Nact), dtype=bool)
+
         # bad actuators are False - a bit confusing but makes 
         # the code less complex. 
         self.dm_bad_act_mask = xp.ones((self.Nact,self.Nact), dtype=bool)
@@ -138,6 +167,8 @@ class SCOOBM():
         xx = (np.linspace(0, self.Nact-1, self.Nact) - self.Nact/2 + 1/2) * self.act_spacing.to(u.mm).value*2
         x,y = np.meshgrid(xx,xx)
         r = np.sqrt(x**2 + y**2)
+        # I'm assuming the 10.5 value below needs to go into a config file?
+
         self.dm_mask[r>10.5] = 0 # had to set the threshold to 10.5 instead of 10.2 to include edge actuators
         
         if self.bad_acts != None:
@@ -150,7 +181,8 @@ class SCOOBM():
                                                    actuator_spacing=self.act_spacing, 
                                                    influence_func=self.inf_fun,
                                                   )
-        
+    
+    # a bunch of these are high-level methods.
     def reset_dm(self):
         self.set_dm(self.dm_ref)
     
@@ -199,6 +231,7 @@ class SCOOBM():
         self.inwave = inwave
         
     def init_opds(self):
+        # see comments about about a data directory.
         opd_dir = Path(os.path.dirname(str(module_path)))/'scoob-opds'
         
         self.m3_opd = poppy.FITSOpticalElement(opd=str(opd_dir/'M3.fits'), opdunits='meters', planetype=inter)
@@ -227,6 +260,11 @@ class SCOOBM():
         self.PUPIL_GRATING = poppy.ArrayOpticalElement(transmission=grating, pixelscale=wf.pixelscale)
         
     def oaefl(self, roc, oad, k=-1):
+# All functions should have the standard docstrings description of the method,
+#  then the parameters, returns, and raises headings.
+# That being said, this can be done over time, but some need it more than others. 
+# This is a non obvious one when looking at the name of the method :)
+
         """
         roc: float
             parent parabola radius of curvature
@@ -246,6 +284,11 @@ class SCOOBM():
         FPM = poppy.ScalarTransmission() if self.FPM is None else self.FPM
         LYOT = poppy.ScalarTransmission() if self.LYOT is None else self.LYOT
         
+        # this should all go in a config file.
+        # Or, maybe just a separate class or method or dictionary such that
+        # we can use the same code for different optical systems.
+        # I wonder if poppy has a way to parameterize systems.
+
         d_pupil_stop_flat = 42.522683120520355*u.mm
         d_flat_oap1 = 89.33864507546247*u.mm
         d_oap1_oap2 = 307.2973451416505*u.mm
@@ -345,6 +388,10 @@ class SCOOBM():
         return fosys
     
     def calc_wfs(self, quiet=False):
+# Do we need both calc_wfs and calc_psf? Seems like it's mostly 
+# repeated code and functionality.
+
+
         '''
         Propagate through the entire system and return the normalized wavefront
         for each surface.
@@ -416,6 +463,10 @@ class SCOOBM():
         return psf
     
     def snap(self, plot=False):
+# I understand why this is useful, but I wonder if it'd be better to
+# have these all wrap calc_psf?
+# There is a lot of duplicated code here.
+
         '''
         Calculate the and return the PSF intensity.
 
@@ -444,6 +495,7 @@ class SCOOBM():
     
     def rotate_wf(self, wave):
         wavefront = wave.wavefront
+        # Why is _scipy local? 
         wavefront_r = _scipy.ndimage.rotate(xp.real(wavefront), angle=-self.det_rotation, reshape=False, order=1)
         wavefront_i = _scipy.ndimage.rotate(xp.imag(wavefront), angle=-self.det_rotation, reshape=False, order=1)
         

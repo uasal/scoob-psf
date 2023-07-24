@@ -1,3 +1,5 @@
+# What is this file? At first I thought it was unit tests but that doesn't appear to be true.
+
 import numpy as np
 import astropy.units as u
 from astropy.constants import h, c
