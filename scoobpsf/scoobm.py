@@ -22,7 +22,6 @@ image = PlaneType.image
 class SCOOBM():
 
     def __init__(self, 
-                 bad_acts=0,
                  wavelength=632.8e-9*u.m, 
                  npix=128, 
                  oversample=2048/128,
@@ -30,17 +29,21 @@ class SCOOBM():
                  psf_pixelscale=4.63e-6*u.m/u.pix,
                  psf_pixelscale_lamD=None,
                  norm='first',
-                 imnorm=1,
+                 NI=False,
+                 Imax_ref=None,
                  det_rotation=0,
                  source_offset=(0,0),
-                 use_opds=False,
-                 use_zwfs=False,
+                 use_synthetic_opds=False,
+                 use_measured_opds=False,
+                 use_noise=False, # FIXME: Noise simulations must be implemented, at the very least implement shot noise
                  use_pupil_grating=False,
                  use_aps=False,
                  inf_fun=None,
                  dm_ref=np.zeros((34,34)),
+                 bad_acts=0,
                  OPD=None,
                  RETRIEVED=None,
+                 ZWFS=None,
                  FPM=None,
                  LYOT=None,
                  pupil_diam=6.75*u.mm,
@@ -95,16 +98,20 @@ class SCOOBM():
         
         self.det_rotation = det_rotation
         self.norm = norm # specifies input wavefront normalization, see POPPY for more details
-        self.imnorm = imnorm # image normalization factor
+        self.NI = NI
+        self.Imax_ref = Imax_ref
         
-        self.use_opds = use_opds
-        self.use_zwfs = use_zwfs
-        self.ZWFS = None
+        self.use_synthetic_opds = use_synthetic_opds
+        self.use_measured_opds = use_measured_opds
+        self.use_opds = self.use_synthetic_opds or self.use_measured_opds
+        self.init_opds()
+        
         self.use_pupil_grating = use_pupil_grating
         self.use_aps = use_aps
         
         self.OPD = poppy.ScalarTransmission(name='OPD Place-holder') if OPD is None else OPD
         self.RETRIEVED = poppy.ScalarTransmission(name='Phase Retrieval Place-holder') if RETRIEVED is None else RETRIEVED
+        self.ZWFS = poppy.ScalarTransmission(name='ZWFS Place-holder') if ZWFS is None else ZWFS
         self.FPM = poppy.ScalarTransmission(name='FPM Place-holder') if FPM is None else FPM
         self.LYOT = poppy.ScalarTransmission(name='Lyot Stop Place-holder') if LYOT is None else LYOT
         
@@ -113,7 +120,7 @@ class SCOOBM():
         self.init_dm()
         self.dm_ref = ensure_np_array(dm_ref)
         self.set_dm(dm_ref)
-        self.init_opds()
+        
     
     # useful for parallelization with ray actors
     def getattr(self, attr):
@@ -199,14 +206,37 @@ class SCOOBM():
         self.inwave = inwave
         
     def init_opds(self):
-        opd_dir = Path(os.path.dirname(str(module_path)))/'scoob-opds'
-        
-        self.m3_opd = poppy.FITSOpticalElement(opd=str(opd_dir/'M3.fits'), opdunits='meters', planetype=inter)
-        self.oap1_opd = poppy.FITSOpticalElement(opd=str(opd_dir/'OAP1.fits'), opdunits='meters', planetype=inter)
-        self.oap2_opd = poppy.FITSOpticalElement(opd=str(opd_dir/'OAP2.fits'), opdunits='meters', planetype=inter)
-        self.oap3_opd = poppy.FITSOpticalElement(opd=str(opd_dir/'OAP3.fits'), opdunits='meters', planetype=inter)
-        self.flat1_opd = poppy.FITSOpticalElement(opd=str(opd_dir/'FLAT1.fits'), opdunits='meters', planetype=inter)
-        self.flat2_opd = poppy.FITSOpticalElement(opd=str(opd_dir/'FLAT2.fits'), opdunits='meters', planetype=inter)
+        if self.use_measured_opds:
+            opd_dir = Path(os.path.dirname(str(module_path)))/'scoob-opds'
+            
+            try:
+                self.m3_opd = poppy.FITSOpticalElement(opd=str(opd_dir/'M3.fits'), opdunits='meters', planetype=inter)
+                self.oap1_opd = poppy.FITSOpticalElement(opd=str(opd_dir/'OAP1.fits'), opdunits='meters', planetype=inter)
+                self.oap2_opd = poppy.FITSOpticalElement(opd=str(opd_dir/'OAP2.fits'), opdunits='meters', planetype=inter)
+                self.oap3_opd = poppy.FITSOpticalElement(opd=str(opd_dir/'OAP3.fits'), opdunits='meters', planetype=inter)
+                self.flat1_opd = poppy.FITSOpticalElement(opd=str(opd_dir/'FLAT1.fits'), opdunits='meters', planetype=inter)
+                self.flat2_opd = poppy.FITSOpticalElement(opd=str(opd_dir/'FLAT2.fits'), opdunits='meters', planetype=inter)
+            except FileNotFoundError:
+                print('Could not find OPD files. Must use synthetic OPD data instead.')
+        elif self.use_synthetic_opds:
+            s1, s2, s3, s4, s5, s6, s7 = (1,2,3,4,5,6,7)
+            
+            self.psd_index = 3.0
+            self.opd_rms = 10*u.nm
+            
+            self.m3_diam = 25.4*u.mm
+            self.flat1_diam = self.pupil_diam
+            self.flat2_diam = 12.7*u.mm
+            self.oap1_diam = 25.4*u.mm
+            self.oap2_diam = 25.4*u.mm
+            self.oap3_diam = 25.4*u.mm
+            
+            self.m3_opd = poppy.StatisticalPSDWFE(index=self.psd_index, wfe=self.opd_rms, radius=self.m3_diam/2, seed=s1)
+            self.flat1_opd = poppy.StatisticalPSDWFE(index=self.psd_index, wfe=self.opd_rms, radius=self.flat1_diam/2, seed=s2)
+            self.flat2_opd = poppy.StatisticalPSDWFE(index=self.psd_index, wfe=self.opd_rms, radius=self.flat2_diam/2, seed=s3)
+            self.oap1_opd = poppy.StatisticalPSDWFE(index=self.psd_index, wfe=self.opd_rms, radius=self.oap1_diam/2, seed=s4)
+            self.oap2_opd = poppy.StatisticalPSDWFE(index=self.psd_index, wfe=self.opd_rms, radius=self.oap2_diam/2, seed=s5)
+            self.oap3_opd = poppy.StatisticalPSDWFE(index=self.psd_index, wfe=self.opd_rms, radius=self.oap3_diam/2, seed=s6)
     
     
     def init_pupil_grating(self):
@@ -311,9 +341,8 @@ class SCOOBM():
         if self.use_aps: fosys.add_optic(one_inch)
         if self.use_opds: fosys.add_optic(self.oap3_opd)
         
-        if self.use_zwfs:
-            ZWFS = poppy.ScalarTransmission(name='Intermediate Focal Plane') if self.ZWFS is None else self.ZWFS
-            fosys.add_optic(ZWFS, distance=d_oap3_FPM)
+        if self.ZWFS is not None:
+            fosys.add_optic(self.ZWFS, distance=d_oap3_FPM)
             
             fl_zwfs_lens = 75*u.mm
             zwfs_lens = poppy.QuadraticLens(fl_zwfs_lens)
@@ -437,9 +466,14 @@ class SCOOBM():
         _, wfs = fosys.calc_psf(inwave=self.inwave, normalize=self.norm, return_intermediates=False, return_final=True)
         
         wf = self.rotate_wf(wfs[-1]) if abs(self.det_rotation)>0 else wfs[-1]
-        im = wf.intensity/self.imnorm
+        im = wf.intensity
+        
+        if self.Imax_ref is not None:
+            im *= 1/self.Imax_ref
+            
         if plot:
             imshows.imshow1(im, lognorm=True, pxscl=self.psf_pixelscale_lamD)
+            
         return im
     
     def rotate_wf(self, wave):
