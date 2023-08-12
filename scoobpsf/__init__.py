@@ -1,5 +1,5 @@
 from . import math_module
-from . import scoobm, agpm, zwfs
+from . import scoob, parascoob, agpm, zwfs
 from .imshows import *
 
 
