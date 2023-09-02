@@ -28,8 +28,10 @@ class ParallelizedScoob():
     def __init__(self, 
                  actors,
                  dm_ref=np.zeros((34,34)),
+                 use_noise=False,
                  exp_time=None,
-                 Imax_ref=None,):
+                 Imax_ref=None,
+                 normalize=False):
         
         
         print('ParallelizedScoob Initialized!')
@@ -42,7 +44,11 @@ class ParallelizedScoob():
         
         self.psf_pixelscale_lamD = ray.get(actors[0].getattr.remote('psf_pixelscale_lamD'))
         self.npsf = ray.get(actors[0].getattr.remote('npsf'))
+        
+        self.use_noise = use_noise
+        self.exp_time = exp_time
         self.Imax_ref = Imax_ref
+        self.normalize = normalize
         
         self.Nact = 34
         self.act_spacing = 300e-6*u.m
@@ -52,33 +58,6 @@ class ParallelizedScoob():
         self.dm_mask = ray.get(actors[0].getattr.remote('dm_mask'))
         self.dm_ref = dm_ref
         self.set_dm(dm_ref)
-    
-    def calc_psfs(self, quiet=True):
-        '''
-        Calculate a psf for each wavelength.
-        This wraps the calc_psf method in the SCOOBM class.
-        Remember that this method returns a wavefront and not a psf.
-
-        Returns
-        -------
-
-        psfs : `array`
-            An array of the wavefronts at each wavelength.
-        '''
-        start = time.time()
-        pending_psfs = []
-        for i in range(len(self.actors)):
-            future_psfs = self.actors[i].calc_psf.remote()
-            pending_psfs.append(future_psfs)
-        psfs = ray.get(pending_psfs)
-        if isinstance(psfs[0], np.ndarray):
-            xp = np
-        elif isinstance(psfs[0], cp.ndarray):
-            xp = cp
-        psfs = xp.array(psfs)
-        
-        if not quiet: print('PSFs calculated in {:.3f}s.'.format(time.time()-start))
-        return psfs    
 
     def set_actor_attr(self, attr, value):
         '''
@@ -106,6 +85,41 @@ class ParallelizedScoob():
     
     def show_dm(self):
         imshows.imshow1(self.get_dm(), 'DM Command',)
+        
+    def calc_psfs(self, quiet=True):
+        start = time.time()
+        pending_psfs = []
+        for i in range(self.Na):
+            future_psfs = self.actors[i].calc_psf.remote()
+            pending_psfs.append(future_psfs)
+        psfs = ray.get(pending_psfs)
+        if isinstance(psfs[0], np.ndarray):
+            xp = np
+        elif isinstance(psfs[0], cp.ndarray):
+            xp = cp
+        psfs = xp.array(psfs)
+        
+        if not quiet: print('PSFs calculated in {:.3f}s.'.format(time.time()-start))
+        return psfs  
+    
+    def snap(self):
+        pending_ims = []
+        for i in range(self.Na):
+            future_ims = self.actors[i].snap.remote()
+            pending_ims.append(future_ims)
+        ims = ray.get(pending_ims)
+        ims = xp.array(ims)
+        im = xp.sum(ims, axis=0)/self.Na
+        
+        if self.normalize:
+            if self.Imax_ref is not None:
+                im /= self.Imax_ref
+                
+            if self.exp_time is not None and self.exp_time_ref is not None:
+                im /= (self.exp_time/self.exp_time_ref).value
+            
+            
+        return im
         
         
         
