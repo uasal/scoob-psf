@@ -43,6 +43,7 @@ class ParallelizedScoob():
         self.oversample = ray.get(actors[0].getattr.remote('oversample'))
         
         self.psf_pixelscale_lamD = ray.get(actors[0].getattr.remote('psf_pixelscale_lamD'))
+        self.det_rotation = ray.get(actors[0].getattr.remote('det_rotation'))
         self.npsf = ray.get(actors[0].getattr.remote('npsf'))
         
         self.use_noise = use_noise
