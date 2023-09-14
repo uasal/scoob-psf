@@ -43,7 +43,7 @@ class CompactSCOOB():
                  oversample=4,
                  npsf=100,
 #                  psf_pixelscale=5e-6*u.m/u.pix,
-                 psf_pixelscale_lamD=1/6, 
+                 psf_pixelscale_lamD=1/5, 
                  detector_rotation=0, 
                  dm_ref=np.zeros((34,34)),
                  dm_inf=None, # defaults to inf.fits
