@@ -18,6 +18,9 @@ import jax.numpy as xp
 platform = jax.devices()[0].platform
 device = jax.devices()[0].device_kind
 
+print(f'Jax platform: {platform}')
+print(f'Jax device: {device}')
+
 '''
 FIXME: This file will eventually contain a compact model of SCOOB similar to how FALCO uses a compact model to compute Jacobians
 '''
@@ -33,8 +36,19 @@ def make_vortex_phase_mask(focal_grid_pol, singularity):
     
     return vortex_phasor
 
+def fft(arr):
+    ftarr = xp.fft.fftshift(xp.fft.fft2(xp.fft.ifftshift(arr)))
+    return ftarr
 
-class CompactSCOOB():
+def ifft(arr):
+    iftarr = xp.fft.ifftshift(xp.fft.ifft2(xp.fft.fftshift(arr)))
+    return iftarr
+
+def mft(arr):
+    
+    return mftarr
+
+class SCOOB():
 
     def __init__(self, 
                  wavelength=None, 
