@@ -7,3 +7,5 @@ dist/
 scoobpsf.egg-info/
 
 scoob-opds/*
+
+example-notebooks/*.fits

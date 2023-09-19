@@ -9,9 +9,12 @@ import copy
 import os
 
 import scoobpsf
+from scoobpsf import imshows
 module_path = Path(os.path.dirname(os.path.abspath(scoobpsf.__file__)))
 
+import jax
 import jax.numpy as xp
+import jax.scipy as _scipy
 
 def shift(arr, Nx=0, Ny=0):
     
@@ -41,6 +44,7 @@ class DeformableMirror():
                  pupil_diam=11.1*u.mm,
                  full_stroke=1.5e-6*u.m,
                  inf_fun=None,
+                 inf_cube=None,
                  inf_sampling=None,
                 ):
         
@@ -61,15 +65,33 @@ class DeformableMirror():
         
         self.command = xp.zeros((self.Nact, self.Nact))
         self.actuators = xp.zeros(self.Nacts)
-        
-        if inf_fun is None:
-            inf_fpath = str(module_path/'inf.fits')
-            inf_fun = xp.array(fits.getdata(inf_fpath))
-            inf_sampling = fits.getheader(inf_fpath)['SAMPLING']
             
-        self.inf_fun = inf_fun
-        self.inf_sampling = inf_sampling # number of pixels per actuator
-        self.Nact_per_inf = (inf_fun.shape[0]-1)/inf_sampling # number of actuators across one influence function grid
+        if isinstance(inf_cube, str):    
+            self.inf_sampling = fits.getheader(inf_cube)['SAMPLING']
+            self.inf_cube = xp.array(fits.getdata(inf_cube))
+        elif isinstance(inf_cube, np.ndarray) or isinstance(inf_cube, xp.ndarray):
+            print('hit this')
+            if inf_sampling is None:
+                raise ValueError('Must supply influence function sampling if providing a numerical array')
+            self.inf_cube = xp.array(inf_cube)
+            self.inf_sampling = inf_sampling
+        elif inf_cube is None:
+            if inf_fun is None:
+                inf_fpath = str(module_path/'inf.fits')
+                self.inf_fun = xp.array(fits.getdata(inf_fpath))
+                self.inf_sampling = fits.getheader(inf_fpath)['SAMPLING']
+            elif isinstance(inf_fun, str):
+                self.inf_fun = xp.array(fits.getdata(inf_fun))
+                self.inf_sampling = fits.getheader(inf_fun)['SAMPLING']
+            elif isinstance(inf_fun, xp.ndarray):
+                if inf_sampling is None:
+                    raise ValueError('Must supply influence function sampling if providing a numerical array')
+                self.inf_fun = inf_fun
+                self.inf_sampling = inf_sampling
+            self.build_inf_cube()
+        self.inf_matrix = self.inf_cube.reshape(self.Nacts, self.inf_cube.shape[1]**2,).T
+        
+#         self.Nact_per_inf = (self.inf_fun.shape[0]-1)/self.inf_sampling # number of actuators across one influence function grid
         self.inf_pixelscale = self.act_spacing/(self.inf_sampling*u.pix)
         
     @property
@@ -90,7 +112,7 @@ class DeformableMirror():
     def actuators(self, act_vector):
         self._command = self.map_actuators_to_command(act_vector) # ensure you update the actuators if command is set
         self._actuators = act_vector
-        
+    
     def map_command_to_actuators(self, command_values):
         actuators = command_values.ravel()[self.dm_mask.ravel()]
         return actuators
@@ -99,60 +121,65 @@ class DeformableMirror():
         command = xp.zeros((self.Nact, self.Nact))
         command = command.at[self.dm_mask].set(act_vector)
         return command
-
+    
     def build_inf_cube(self, overpad=None):
         
         Nsurf = int(self.inf_sampling * self.Nact)
         if overpad is None:
-            overpad = self.inf_sampling
+            overpad = round(self.inf_sampling)
         
         Nsurf_padded = Nsurf + overpad
         
-        padded_inf_fun = jdm.pad_or_crop(DM.inf_fun, Nsurf_padded)
-        imshow1(np.asarray(padded_inf_fun))
+        padded_inf_fun = pad_or_crop(self.inf_fun, Nsurf_padded)
+        imshows.imshow1(np.asarray(padded_inf_fun))
 
-        self.inf_cube = jnp.zeros((self.Nacts, Nsurf_padded, Nsurf_padded))
+        self.inf_cube = xp.zeros((self.Nacts, Nsurf_padded, Nsurf_padded))
         act_inds = np.argwhere(np.asarray(self.dm_mask))
 
-        for i in range(DM.Nacts):
-            Nx = int(jnp.round((act_inds[i][1] + 1/2 - self.Nact/2) * self.inf_sampling))
-            Ny = int(jnp.round((act_inds[i][0] + 1/2 - self.Nact/2) * self.inf_sampling))
-            shifted_inf_fun = jnp.array(scipy.ndimage.shift(np.asarray(padded_inf_fun), (Ny,Nx)))
-            self.inf_cube = inf_cube.at[i].set(shifted_inf_fun)
-            
-        self.inf_matrix = self.inf_cube.reshape(DM.Nacts, inf_cube.shape[1]**2,).T
+        for i in range(self.Nacts):
+            Nx = int(xp.round((act_inds[i][1] + 1/2 - self.Nact/2) * self.inf_sampling))
+            Ny = int(xp.round((act_inds[i][0] + 1/2 - self.Nact/2) * self.inf_sampling))
+            shifted_inf_fun = xp.array(scipy.ndimage.shift(np.asarray(padded_inf_fun), (Ny,Nx)))
+            self.inf_cube = self.inf_cube.at[i].set(shifted_inf_fun)
         
-    def get_surface(self):
+        return
         
-        surf = inf_matrix.dot(acts).reshape(self.inf_cube.shape[1], self.inf_cube.shape[1])
+    def get_surface(self, pixelscale=None):
         
-        return surf
+        surf = self.inf_matrix.dot(self.actuators).reshape(self.inf_cube.shape[1], self.inf_cube.shape[1])
+        
+        if pixelscale is None:
+            return surf
+        else:
+            surf = self.interp_surf(surf, self.inf_pixelscale.to_value(u.m/u.pix), pixelscale.to_value(u.m/u.pix))
+            return surf
     
-    
-#         surf = xp.zeros(())
-        
-#     def get_surface(self, npix):
-#         Ninf = self.inf_fun.shape[0]
-#         npact = self.inf_sampling
-#         nact = self.Nact_per_inf
-        
-#         Nsurf = (self.Nact-1)*npact+npact+1
-#         Nover = int(Nsurf+2*np.floor(nact/2)*npact)
-#         oversized_surface = xp.zeros((Nover,Nover))
-        
-#         for j in range(self.Nact):
-#             for i in range(self.Nact):
-#                 DMi = xp.zeros_like(oversized_surface)
-#                 DMi[npact*(i):Ninf+npact*(i),npact*(j):Ninf+npact*(j)] = self.command[i,j]*self.inf_fun
-#                 oversized_surface += DMi
-        
-#         surf = oversized_surface[np.floor(nact/2)*npact:-np.floor(nact/2)*npact,
-#                                  np.floor(nact/2)*npact:-np.floor(nact/2)*npact]
-        
-#         new_pixelscale = self.active_diam/(npix*u.pix)
-#         interped_surf = interp_2d_array(surf, self.inf_pixelscale.to_value(u.m/u.pix), new_pixelscale.to_value(u.m/u.pix))
-#         return interped_surf
+    def interp_surf(self, surf, pixelscale, new_pixelscale):
+        Nold = surf.shape[0]
+        old_xmax = pixelscale * Nold/2
 
+        x,y = xp.ogrid[-old_xmax:old_xmax-pixelscale:Nold*1j,
+                       -old_xmax:old_xmax-pixelscale:Nold*1j]
+
+        Nnew = int(np.ceil(2*old_xmax/new_pixelscale)) + 1
+        new_xmax = new_pixelscale * Nnew/2
+
+        newx,newy = xp.mgrid[-new_xmax:new_xmax-new_pixelscale:Nnew*1j,
+                             -new_xmax:new_xmax-new_pixelscale:Nnew*1j]
+
+        x0 = x[0,0]
+        y0 = y[0,0]
+        dx = x[1,0] - x0
+        dy = y[0,1] - y0
+
+        ivals = (newx - x0)/dx
+        jvals = (newy - y0)/dy
+
+        coords = xp.array([ivals, jvals])
+
+        interped_arr = _scipy.ndimage.map_coordinates(surf, coords, order=1)
+        return interped_arr
+        
 def interp_2d_array(arr, pixelscale, new_pixelscale):
     Nold = arr.shape[0]
     old_xmax = pixelscale * Nold/2
@@ -176,7 +203,7 @@ def interp_2d_array(arr, pixelscale, new_pixelscale):
 
     coords = xp.array([ivals, jvals])
 
-    interped_arr = _scipy.ndimage.map_coordinates(arr, coords, order=3)
+    interped_arr = _scipy.ndimage.map_coordinates(arr, coords, order=1)
     return interped_arr
 
 
