@@ -16,10 +16,6 @@ import jax
 import jax.numpy as xp
 import jax.scipy as _scipy
 
-def shift(arr, Nx=0, Ny=0):
-    
-    return xp.pad(arr,((Ny,0),(0,Nx)), mode='constant')[:-Ny, :-Nx]
-
 def pad_or_crop( arr_in, npix ):
     n_arr_in = arr_in.shape[0]
     if n_arr_in == npix:
