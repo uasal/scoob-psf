@@ -48,7 +48,8 @@ def pad_or_crop( arr_in, npix ):
         arr_out = arr_out.at[x1:x2,x1:x2].set(arr_in)
     return arr_out
 
-def make_vortex_phase_mask(focal_grid_polar, charge=6, singularity=None):
+def make_vortex_phase_mask(focal_grid_polar, charge=6, 
+                           singularity=None, focal_length=500*u.mm, pupil_diam=9.7*u.mm, wavelength=632.8*u.nm):
     
     r = focal_grid_polar[0]
     th = focal_grid_polar[1]
@@ -262,6 +263,7 @@ class SCOOB():
         
         self.wavefront = xp.ones((self.N,self.N), dtype=xp.complex128)
         self.wavefront *= self.PUPIL # apply the pupil
+        
         self.wavefront *= WFE # apply WFE data
         self.wavefront = self.apply_dm(self.wavefront)# apply the DM
         
@@ -276,7 +278,45 @@ class SCOOB():
         self.nlamD = self.npsf * self.psf_pixelscale_lamD * self.oversample
         self.wavefront = mft(self.wavefront, self.nlamD, self.npsf)
         
+        if self.Imax_ref is not None:
+            self.wavefront /= xp.sqrt(self.Imax_ref)
+        
         return self.wavefront
     
+    def snap(self, plot=False, vmax=None, vmin=None, grid=False):
+        fpwf = self.propagate()
+        image = xp.abs(fpwf)**2
+        if plot:
+            imshows.imshow1(ensure_np_array(image), pxscl=self.psf_pixelscale_lamD,
+                            lognorm=True, vmax=vmax, vmin=vmin,
+                            grid=grid)
+        return image
+
+import poppy
+def generate_wfe(diam, distance=100*u.mm, 
+                 opd_index=2.5, amp_index=2, 
+                 opd_seed=1234, amp_seed=12345,
+                 opd_rms=10*u.nm, amp_rms=0.05*u.nm,
+                 npix=256, oversample=4, 
+                 wavelength=500*u.nm):
+    wf = poppy.FresnelWavefront(beam_radius=diam/2, npix=npix, oversample=oversample, wavelength=wavelength)
+    wfe_opd = poppy.StatisticalPSDWFE(index=opd_index, wfe=opd_rms, radius=diam/2, seed=opd_seed).get_opd(wf)
+    wfe_amp = poppy.StatisticalPSDWFE(index=amp_index, wfe=amp_rms, radius=diam/2, seed=amp_seed).get_opd(wf)
+    wfe_amp /= amp_rms.unit.to(u.m)
+    wfe_amp += 1 - amp_rms.to_value(u.m)/amp_rms.unit.to(u.m)
+    
+#     wfe_amp /= wfe_amp.max()
+    
+    wfe_amp = xp.asarray(wfe_amp.get())
+    wfe_opd = xp.asarray(wfe_opd.get())
+    wfe = wfe_amp * xp.exp(1j*2*np.pi/wavelength.to_value(u.m) * wfe_opd)
+    wfe *= xp.asarray(poppy.CircularAperture(radius=diam/2).get_transmission(wf).get())
+    
+#     wf *= poppy.StatisticalPSDWFE(index=index, wfe=rms, radius=diam/2, seed=seed)
+#     wf *= poppy.CircularAperture(radius=diam/2)
+#     wf.propagate_fresnel(distance)
+#     wf *= poppy.CircularAperture(radius=diam/2)
+#     wfe = wf.wavefront
+    return wfe
 
 
