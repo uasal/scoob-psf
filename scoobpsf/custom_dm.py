@@ -12,9 +12,8 @@ import scoobpsf
 from scoobpsf import imshows
 module_path = Path(os.path.dirname(os.path.abspath(scoobpsf.__file__)))
 
-import jax
-import jax.numpy as xp
-import jax.scipy as _scipy
+from .math_module import xp,_scipy, ensure_np_array
+from . import imshows
 
 def pad_or_crop( arr_in, npix ):
     n_arr_in = arr_in.shape[0]
@@ -55,8 +54,7 @@ class DeformableMirror():
         xx = (xp.linspace(0, self.Nact-1, self.Nact) - self.Nact/2 + 1/2) * 2*self.act_spacing.to_value(u.m)
         x,y = xp.meshgrid(xx,xx)
         r = xp.sqrt(x**2 + y**2)
-#         self.dm_mask[r>(self.active_diam + self.act_spacing).to_value(u.m)] = 0
-        self.dm_mask = self.dm_mask.at[r>(self.active_diam + self.act_spacing).to_value(u.m)].set(0)
+        self.dm_mask[r>(self.active_diam + self.act_spacing).to_value(u.m)] = 0
         self.Nacts = int(xp.sum(self.dm_mask))
         
         self.command = xp.zeros((self.Nact, self.Nact))
@@ -115,7 +113,7 @@ class DeformableMirror():
         
     def map_actuators_to_command(self, act_vector):
         command = xp.zeros((self.Nact, self.Nact))
-        command = command.at[self.dm_mask].set(act_vector)
+        command[self.dm_mask] = act_vector
         return command
     
     def build_inf_cube(self, overpad=None):
@@ -127,16 +125,15 @@ class DeformableMirror():
         Nsurf_padded = Nsurf + overpad
         
         padded_inf_fun = pad_or_crop(self.inf_fun, Nsurf_padded)
-        imshows.imshow1(np.asarray(padded_inf_fun))
 
         self.inf_cube = xp.zeros((self.Nacts, Nsurf_padded, Nsurf_padded))
-        act_inds = np.argwhere(np.asarray(self.dm_mask))
+        act_inds = xp.argwhere(self.dm_mask)
 
         for i in range(self.Nacts):
             Nx = int(xp.round((act_inds[i][1] + 1/2 - self.Nact/2) * self.inf_sampling))
             Ny = int(xp.round((act_inds[i][0] + 1/2 - self.Nact/2) * self.inf_sampling))
-            shifted_inf_fun = xp.array(scipy.ndimage.shift(np.asarray(padded_inf_fun), (Ny,Nx)))
-            self.inf_cube = self.inf_cube.at[i].set(shifted_inf_fun)
+            shifted_inf_fun = _scipy.ndimage.shift(padded_inf_fun, (Ny,Nx))
+            self.inf_cube[i] = shifted_inf_fun
         
         return
         
@@ -157,7 +154,7 @@ class DeformableMirror():
         x,y = xp.ogrid[-old_xmax:old_xmax-pixelscale:Nold*1j,
                        -old_xmax:old_xmax-pixelscale:Nold*1j]
 
-        Nnew = int(np.ceil(2*old_xmax/new_pixelscale)) + 1
+        Nnew = int(np.ceil(2*old_xmax/new_pixelscale)) - 1
         new_xmax = new_pixelscale * Nnew/2
 
         newx,newy = xp.mgrid[-new_xmax:new_xmax-new_pixelscale:Nnew*1j,
@@ -173,34 +170,9 @@ class DeformableMirror():
 
         coords = xp.array([ivals, jvals])
 
-        interped_arr = _scipy.ndimage.map_coordinates(surf, coords, order=1)
+        interped_arr = _scipy.ndimage.map_coordinates(surf, coords, order=3)
         return interped_arr
         
-def interp_2d_array(arr, pixelscale, new_pixelscale):
-    Nold = arr.shape[0]
-    old_xmax = pixelscale * Nold/2
-
-    x,y = xp.ogrid[-old_xmax:old_xmax-pixelscale:Nold*1j,
-                   -old_xmax:old_xmax-pixelscale:Nold*1j]
-
-    Nnew = int(np.ceil(2*old_xmax/new_pixelscale)) + 1
-    new_xmax = new_pixelscale * Nnew/2
-
-    newx,newy = xp.mgrid[-new_xmax:new_xmax-new_pixelscale:Nnew*1j,
-                         -new_xmax:new_xmax-new_pixelscale:Nnew*1j]
-
-    x0 = x[0,0]
-    y0 = y[0,0]
-    dx = x[1,0] - x0
-    dy = y[0,1] - y0
-
-    ivals = (newx - x0)/dx
-    jvals = (newy - y0)/dy
-
-    coords = xp.array([ivals, jvals])
-
-    interped_arr = _scipy.ndimage.map_coordinates(arr, coords, order=1)
-    return interped_arr
 
 
 

@@ -56,7 +56,7 @@ def update_scipy(module):
 def ensure_np_array(arr):
     if isinstance(arr, np.ndarray):
         return arr
-    elif jax_avail and isinstance(arr, jnp.ndarray):
+    elif jax_avail and isinstance(arr, jax.numpy.ndarray):
         return np.asarray(arr)
     else:
         return arr.get()
