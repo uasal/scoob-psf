@@ -5,6 +5,7 @@ import time
 import os
 from pathlib import Path
 import ray
+import copy
 
 import scoobpsf
 module_path = Path(os.path.dirname(os.path.abspath(scoobpsf.__file__)))
@@ -259,6 +260,7 @@ class SCOOB():
             self.wavefront *= FPM
             self.wavefront = ifft(self.wavefront)
     
+#         imshows.imshow1(xp.abs(self.wavefront))
         self.wavefront *= LYOT # apply the Lyot stop
         
         # propagate to image plane with MFT
@@ -273,8 +275,70 @@ class SCOOB():
         
         return self.wavefront
     
+    def propagate(self, return_all=False):
+        self.init_grids()
+        
+        if return_all:
+            wavefronts = []
+        
+        WFE = xp.ones((self.N, self.N), dtype=xp.complex128) if self.WFE is None else self.WFE
+        FPM = xp.ones((self.N, self.N), dtype=xp.complex128) if self.FPM is None else self.FPM
+        LYOT = xp.ones((self.N, self.N), dtype=xp.complex128) if self.LYOT is None else self.LYOT
+        
+        self.wavefront = xp.ones((self.N,self.N), dtype=xp.complex128)
+        self.wavefront *= self.PUPIL # apply the pupil
+        if return_all: wavefronts.append(copy.copy(self.wavefront))
+        
+        self.wavefront *= WFE # apply WFE data
+        if return_all: wavefronts.append(copy.copy(self.wavefront))
+        
+        self.wavefront = self.apply_dm(self.wavefront)# apply the DM
+        if return_all: wavefronts.append(copy.copy(self.wavefront))
+            
+        if self.FPM is not None: 
+            self.wavefront = fft(self.wavefront)
+            if return_all: wavefronts.append(copy.copy(self.wavefront))
+            self.wavefront *= FPM
+            if return_all: wavefronts.append(copy.copy(self.wavefront))
+            self.wavefront = ifft(self.wavefront)
+            if return_all: wavefronts.append(copy.copy(self.wavefront))
+        
+        self.wavefront *= LYOT # apply the Lyot stop
+        if return_all: wavefronts.append(copy.copy(self.wavefront))
+            
+        # propagate to image plane with MFT
+        self.nlamD = self.npsf * self.psf_pixelscale_lamD * self.oversample
+        self.wavefront = mft(self.wavefront, self.nlamD, self.npsf)
+        
+        if self.Imax_ref is not None:
+            self.wavefront /= xp.sqrt(self.Imax_ref)
+        
+        if self.reverse_parity:
+            self.wavefront = xp.rot90(xp.rot90(self.wavefront))
+            
+        if self.det_rotation is not None:
+            self.wavefront = self.rotate_wf(self.wavefront)
+            
+        if return_all: wavefronts.append(copy.copy(self.wavefront))
+        
+        if return_all:
+            return wavefronts
+        else:
+            return self.wavefront
+    
+    def rotate_wf(self, wavefront):
+        wavefront_r = _scipy.ndimage.rotate(xp.real(wavefront), angle=-self.det_rotation, reshape=False, order=1)
+        wavefront_i = _scipy.ndimage.rotate(xp.imag(wavefront), angle=-self.det_rotation, reshape=False, order=1)
+        
+        new_wavefront = (wavefront_r + 1j*wavefront_i)
+        return new_wavefront
+    
+    def calc_psf(self):
+        fpwf = self.propagate(return_all=False)
+        return fpwf
+    
     def snap(self, plot=False, vmax=None, vmin=None, grid=False):
-        fpwf = self.propagate()
+        fpwf = self.propagate(return_all=False)
         image = xp.abs(fpwf)**2
         if plot:
             imshows.imshow1(ensure_np_array(image), pxscl=self.psf_pixelscale_lamD,
