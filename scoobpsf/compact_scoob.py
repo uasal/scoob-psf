@@ -126,7 +126,8 @@ class SCOOB():
                  psf_pixelscale_lamD=1/5, 
                  detector_rotation=0, 
                  dm_ref=np.zeros((34,34)),
-                 dm_inf=None, # defaults to inf.fits
+                 inf_cube=None,
+                 inf_fun=None, # defaults to inf.fits
                  Imax_ref=None,
                  WFE=None,
                  FPM=None,
@@ -147,7 +148,7 @@ class SCOOB():
         self.npsf = npsf
         self.psf_pixelscale_lamD = psf_pixelscale_lamD
         self.det_rotation = detector_rotation
-        
+
         self.Imax_ref = Imax_ref
         
         self.WFE = WFE
@@ -157,6 +158,16 @@ class SCOOB():
         self.dm_fill_factor = dm_fill_factor # ratio for representing the illuminated area of the DM to accurately compute DM surface
         self.reverse_parity = True
         
+        if inf_cube is None and inf_fun is None: # dedaults to inf_cube.fits
+            self.inf_cube = str(module_path/'inf_cube.fits')
+            self.inf_fun = None
+        elif inf_cube is not None and inf_fun is None: # uses supplied inf_cube
+            self.inf_cube = inf_cube
+            self.inf_fun = None
+        elif inf_cube is None and inf_fun is not None:
+            self.inf_cube=None
+            self.inf_fun = inf_fun 
+
         self.init_dm()
         self.init_grids()
         
@@ -178,7 +189,7 @@ class SCOOB():
         r = np.sqrt(x**2 + y**2)
         self.dm_mask[r>10.5] = 0 # had to set the threshold to 10.5 instead of 10.2 to include edge actuators
         
-        self.DM = custom_dm.DeformableMirror(inf_cube='inf_cube.fits')
+        self.DM = custom_dm.DeformableMirror(inf_cube=self.inf_cube, inf_fun=self.inf_fun)
         
     def reset_dm(self):
         self.set_dm(np.zeros((self.Nact,self.Nact)))
