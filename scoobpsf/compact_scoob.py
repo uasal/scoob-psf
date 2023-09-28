@@ -13,6 +13,7 @@ module_path = Path(os.path.dirname(os.path.abspath(scoobpsf.__file__)))
 from .import custom_dm
 from .math_module import xp,_scipy, ensure_np_array
 from . import imshows
+from . import utils
 
 def make_vortex_phase_mask(focal_grid_polar, charge=6, 
                            singularity=None, focal_length=500*u.mm, pupil_diam=9.7*u.mm, wavelength=632.8*u.nm):
@@ -126,6 +127,7 @@ class SCOOB():
                  psf_pixelscale_lamD=1/5, 
                  detector_rotation=0, 
                  dm_ref=np.zeros((34,34)),
+                 bad_acts=None,
                  inf_cube=None,
                  inf_fun=None, # defaults to inf.fits
                  Imax_ref=None,
@@ -168,7 +170,11 @@ class SCOOB():
             self.inf_cube=None
             self.inf_fun = inf_fun 
 
+        self.bad_acts = bad_acts
         self.init_dm()
+        self.dm_ref = dm_ref
+        self.set_dm(dm_ref)
+
         self.init_grids()
         
     def getattr(self, attr):
@@ -191,9 +197,12 @@ class SCOOB():
         
         self.DM = custom_dm.DeformableMirror(inf_cube=self.inf_cube, inf_fun=self.inf_fun)
         
-    def reset_dm(self):
+    def zero_dm(self):
         self.set_dm(np.zeros((self.Nact,self.Nact)))
-        
+    
+    def reset_dm(self):
+        self.set_dm(self.dm_ref)
+    
     def set_dm(self, command):
         if command.shape[0]==self.Nacts:
             dm_command = self.DM.map_actuators_to_command(xp.asarray(command))
@@ -357,5 +366,34 @@ class SCOOB():
                             grid=grid)
         return image
 
+
+def process_pr_data(pr_amp, pr_phs, npup, pr_rotation, 
+                    N=None,
+                    amp_norm=1,
+                    remove_modes=None,
+                    ):
+    
+    if isinstance(pr_amp, str):
+        pr_amp = xp.array(fits.getdata(pr_amp))/amp_norm
+    if isinstance(pr_phs, str):
+        pr_phs = xp.array(fits.getdata(pr_phs))
+    imshows.imshow2(pr_amp, pr_phs)
+
+    pr_amp = utils.pad_or_crop(pr_amp, npup)
+    pr_phs = utils.pad_or_crop(pr_phs, npup)
+    imshows.imshow2(pr_amp, pr_phs)
+
+    pr_amp = _scipy.ndimage.rotate(pr_amp, angle=pr_rotation, reshape=False, order=3)
+    pr_phs = _scipy.ndimage.rotate(pr_phs, angle=pr_rotation, reshape=False, order=3)
+    imshows.imshow2(pr_amp, pr_phs)
+
+    # FIXME: include interpolation to the model pixelscale if required
+
+    wfe = pr_amp*xp.exp(1j*pr_phs)
+
+    if N is not None:
+        utils.pad_or_crop(wfe, N)
+
+    return wfe
 
 

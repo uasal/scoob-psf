@@ -27,7 +27,7 @@ def pad_or_crop( arr_in, npix ):
         arr_out = xp.zeros((npix,npix), dtype=arr_in.dtype)
         x1 = npix // 2 - n_arr_in // 2
         x2 = x1 + n_arr_in
-        arr_out = arr_out.at[x1:x2,x1:x2].set(arr_in)
+        arr_out[x1:x2,x1:x2] = arr_in
     return arr_out
 
 class DeformableMirror():
@@ -64,7 +64,6 @@ class DeformableMirror():
             self.inf_sampling = fits.getheader(inf_cube)['SAMPLING']
             self.inf_cube = xp.array(fits.getdata(inf_cube))
         elif isinstance(inf_cube, np.ndarray) or isinstance(inf_cube, xp.ndarray):
-            print('hit this')
             if inf_sampling is None:
                 raise ValueError('Must supply influence function sampling if providing a numerical array')
             self.inf_cube = xp.array(inf_cube)
