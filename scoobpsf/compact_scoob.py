@@ -368,6 +368,7 @@ class SCOOB():
 
 
 def process_pr_data(pr_amp, pr_phs, npup, pr_rotation, 
+                    pixelscale=None,
                     N=None,
                     amp_norm=1,
                     remove_modes=None,
@@ -385,11 +386,19 @@ def process_pr_data(pr_amp, pr_phs, npup, pr_rotation,
 
     pr_amp = _scipy.ndimage.rotate(pr_amp, angle=pr_rotation, reshape=False, order=3)
     pr_phs = _scipy.ndimage.rotate(pr_phs, angle=pr_rotation, reshape=False, order=3)
+    print(pr_amp.shape)
     imshows.imshow2(pr_amp, pr_phs)
 
     # FIXME: include interpolation to the model pixelscale if required
+    if pixelscale is not None:
+        pr_amp = utils.interp_arr(pr_amp, (6.75*u.mm/(npup*u.pix)).to_value(u.m/u.pix), pixelscale.to_value(u.m/u.pix))
+        pr_phs = utils.interp_arr(pr_phs, (6.75*u.mm/(npup*u.pix)).to_value(u.m/u.pix), pixelscale.to_value(u.m/u.pix))
+    print(pr_amp.shape)
+    imshows.imshow2(pr_amp, pr_phs)
 
     wfe = pr_amp*xp.exp(1j*pr_phs)
+
+
 
     if N is not None:
         utils.pad_or_crop(wfe, N)
