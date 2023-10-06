@@ -243,7 +243,6 @@ class SCOOB():
         fpr = xp.sqrt(fpx**2 + fpy**2)
         fpth = xp.arctan2(fpy,fpx)
         
-#         self.focal_grid_car = xp.array([fpx, fpy])
         self.focal_grid_pol = xp.array([fpr, fpth])
         
         x_im = ( xp.linspace(-self.npsf/2, self.npsf/2-1, self.npsf) + 1/2 ) * self.psf_pixelscale_lamD

@@ -14,21 +14,50 @@ module_path = Path(os.path.dirname(os.path.abspath(scoobpsf.__file__)))
 
 from .math_module import xp,_scipy, ensure_np_array
 from . import imshows
+from . utils import pad_or_crop
 
-def pad_or_crop( arr_in, npix ):
-    n_arr_in = arr_in.shape[0]
-    if n_arr_in == npix:
-        return arr_in
-    elif npix < n_arr_in:
-        x1 = n_arr_in // 2 - npix // 2
-        x2 = x1 + npix
-        arr_out = arr_in[x1:x2,x1:x2]
-    else:
-        arr_out = xp.zeros((npix,npix), dtype=arr_in.dtype)
-        x1 = npix // 2 - n_arr_in // 2
-        x2 = x1 + n_arr_in
-        arr_out[x1:x2,x1:x2] = arr_in
-    return arr_out
+import matplotlib.patches as patches
+
+def make_gaussian_inf_fun(act_spacing=300e-6*u.m, sampling=25, coupling=0.15,
+                            plot=False,
+                            save_fits=None):
+
+    Nacts_per_inf = 4 # number of influence functions across the grid
+    ng = int(sampling*Nacts_per_inf) + 1
+
+    pxscl = act_spacing/(sampling*u.pix)
+    ext = Nacts_per_inf * act_spacing
+
+    xs = (np.linspace(-ng/2,ng/2-1,ng)+1/2)*pxscl.value
+    x,y = np.meshgrid(xs,xs)
+    r = np.sqrt(x**2 + y**2)
+
+    # d = act_spacing.value/1.25
+    d = act_spacing.value/np.sqrt(-np.log(coupling))
+    print(d)
+
+    inf = np.exp(-(r/d)**2)
+    rcoupled = d*np.sqrt(-np.log(coupling)) 
+
+    if plot:
+        fig,ax = imshow1(inf, pxscl=pxscl, patches=[patches.Circle((0,0), rcoupled, fill=False, color='c')], 
+                            display_fig=False, return_fig=True)
+        ticks = np.linspace(-ext.value/2, ext.value/2, 5)
+        ax.set_xticks(ticks)
+        ax.set_yticks(ticks)
+        ax.grid()
+        display(fig)
+
+    if save_fits is not None:
+        hdr = fits.Header()
+        hdr['SAMPLING'] = sampling
+        hdr.comments['SAMPLING'] = '# pixels per actuator'
+        hdr['NACTS'] = ext_act
+        hdr.comments['NACTS'] = '# actuators across grid'
+        inf_hdu = fits.PrimaryHDU(data=inf, header=hdr)
+        inf_hdu.writeto(str(save_fits), overwrite=True)
+
+    return inf, sampling
 
 class DeformableMirror():
     
