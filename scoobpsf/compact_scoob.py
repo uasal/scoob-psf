@@ -7,6 +7,8 @@ from pathlib import Path
 import ray
 import copy
 
+from skimage.filters import threshold_otsu
+
 import scoobpsf
 module_path = Path(os.path.dirname(os.path.abspath(scoobpsf.__file__)))
 
@@ -14,6 +16,7 @@ from .import custom_dm
 from .math_module import xp,_scipy, ensure_np_array
 from . import imshows
 from . import utils
+
 
 def make_vortex_phase_mask(focal_grid_polar, charge=6, 
                            singularity=None, focal_length=500*u.mm, pupil_diam=9.7*u.mm, wavelength=632.8*u.nm):
@@ -377,31 +380,64 @@ def process_pr_data(pr_amp, pr_phs, npup, pr_rotation,
         pr_amp = xp.array(fits.getdata(pr_amp))/amp_norm
     if isinstance(pr_phs, str):
         pr_phs = xp.array(fits.getdata(pr_phs))
-    imshows.imshow2(pr_amp, pr_phs)
+    # imshows.imshow2(pr_amp, pr_phs)
 
     pr_amp = utils.pad_or_crop(pr_amp, npup)
     pr_phs = utils.pad_or_crop(pr_phs, npup)
     imshows.imshow2(pr_amp, pr_phs)
 
-    pr_amp = _scipy.ndimage.rotate(pr_amp, angle=pr_rotation, reshape=False, order=3)
-    pr_phs = _scipy.ndimage.rotate(pr_phs, angle=pr_rotation, reshape=False, order=3)
-    print(pr_amp.shape)
+    if remove_modes is not None:
+        thresh_mask = xp.array(pr_amp>threshold_otsu(pr_amp))
+        pr_phs[~thresh_mask] = xp.NaN
+        imshows.imshow2(thresh_mask, pr_phs)
+
+        Zs = poppy.zernike.arbitrary_basis(thresh_mask, nterms=remove_modes, outside=0)
+        imshows.imshow3(Zs[0], Zs[1], Zs[2])
+        
+        Zc = lstsq(ensure_np_array(Zs), ensure_np_array(pr_phs))
+
+        for i in range(remove_modes):
+            pr_phs -= Zc[i] * Zs[i]
+        pr_amp[~thresh_mask] = 0.0
+        pr_phs[~thresh_mask] = 0.0
     imshows.imshow2(pr_amp, pr_phs)
 
-    # FIXME: include interpolation to the model pixelscale if required
+    pr_amp = _scipy.ndimage.rotate(pr_amp, angle=pr_rotation, reshape=False, order=3)
+    pr_phs = _scipy.ndimage.rotate(pr_phs, angle=pr_rotation, reshape=False, order=3)
+
     if pixelscale is not None:
         pr_amp = utils.interp_arr(pr_amp, (6.75*u.mm/(npup*u.pix)).to_value(u.m/u.pix), pixelscale.to_value(u.m/u.pix))
         pr_phs = utils.interp_arr(pr_phs, (6.75*u.mm/(npup*u.pix)).to_value(u.m/u.pix), pixelscale.to_value(u.m/u.pix))
-    print(pr_amp.shape)
     imshows.imshow2(pr_amp, pr_phs)
 
     wfe = pr_amp*xp.exp(1j*pr_phs)
-
-
 
     if N is not None:
         utils.pad_or_crop(wfe, N)
 
     return wfe
 
+def lstsq(modes, data):
+    """Least-Squares fit of modes to data.
 
+    Parameters
+    ----------
+    modes : iterable
+        modes to fit; sequence of ndarray of shape (m, n)
+    data : numpy.ndarray
+        data to fit, of shape (m, n)
+        place NaN values in data for points to ignore
+
+    Returns
+    -------
+    numpy.ndarray
+        fit coefficients
+
+    """
+    mask = np.isfinite(data)
+    data = data[mask]
+    modes = np.asarray(modes)
+    modes = modes.reshape((modes.shape[0], -1))  # flatten second dim
+    modes = modes[:, mask.ravel()].T  # transpose moves modes to columns, as needed for least squares fit
+    c, *_ = np.linalg.lstsq(modes, data, rcond=None)
+    return c

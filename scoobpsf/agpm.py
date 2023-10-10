@@ -33,6 +33,7 @@ class IdealAGPM(poppy.AnalyticOpticalElement):
                  wavelength=1e-6 * u.meter,
                  charge=2,
                  singularity=None,
+                 centering='PIXEL', # PIXEL or INTERPIXEL
                  **kwargs):
         
         poppy.AnalyticOpticalElement.__init__(self, planetype=PlaneType.intermediate, **kwargs)
@@ -40,6 +41,8 @@ class IdealAGPM(poppy.AnalyticOpticalElement):
         self.lp = charge
         self.singularity = singularity
         self.central_wavelength = wavelength
+
+        self.centering = centering
         
     def get_phasor(self, wave):
         """
