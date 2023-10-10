@@ -15,14 +15,6 @@ module_path = Path(os.path.dirname(os.path.abspath(scoobpsf.__file__)))
 
 import poppy
 
-# import scoobpy
-# from scoobpy import utils
-# scoobpy_avail = True
-
-# from purepyindi import INDIClient, SwitchState
-# client = INDIClient('localhost', 7624)
-# client.start()
-# print('Succesfully initialized testbed interface.')
 
 try:
     import scoobpy
@@ -143,6 +135,8 @@ class SCOOBI():
         
         self.x_shift = x_shift
         self.y_shift = y_shift
+
+        self.use_cupy = False
     
     
     @property
@@ -207,14 +201,17 @@ class SCOOBI():
         else:
             im = self.cam.grab_latest()
 
-        im = scipy.ndimage.shift(im, (self.y_shift, self.x_shift), order=0)
+        if self.use_cupy:
+            im = xp.array(im)
+        
+        im = _scipy.ndimage.shift(im, (self.y_shift, self.x_shift), order=0)
         im = pad_or_crop(im, self.npsf)
         if self.normalize and self.texp_ref is not None and self.max_ref is not None:
             im *= (1/self.max_ref) * (self.texp_ref/self.texp)
             
         if plot:
             imshows.imshow1(im, lognorm=True, pxscl=self.psf_pixelscale_lamD, grid=True, vmin=None)
-            
+        
         return im
     
     
