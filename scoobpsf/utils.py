@@ -1,6 +1,12 @@
+# looks like _scipy is unused?
+# Black and flake8 are your friends here.
+# It might be worth setting up a pre-commit hook for black.
+# flake8 is sort of a PITA.
+# isort is sort of nice to use as well.
+
 from .math_module import xp, _scipy, ensure_np_array
 import numpy as np
-import scipy
+import scipy  # is this an unused import? my linter says so.
 
 from astropy.io import fits
 import pickle
