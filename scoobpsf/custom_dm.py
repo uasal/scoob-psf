@@ -8,13 +8,11 @@ import time
 import copy
 import os
 
-import scoobpsf
-from scoobpsf import imshows
-module_path = Path(os.path.dirname(os.path.abspath(scoobpsf.__file__)))
+import poppy
 
 from .math_module import xp,_scipy, ensure_np_array
-from . import imshows
-from . utils import pad_or_crop
+from . imshows import *
+from . utils import pad_or_crop, interp_arr
 
 import matplotlib.patches as patches
 
@@ -34,13 +32,13 @@ def make_gaussian_inf_fun(act_spacing=300e-6*u.m, sampling=25, coupling=0.15,
 
     # d = act_spacing.value/1.25
     d = act_spacing.value/np.sqrt(-np.log(coupling))
-    print(d)
+    # print(d)
 
     inf = np.exp(-(r/d)**2)
     rcoupled = d*np.sqrt(-np.log(coupling)) 
 
     if plot:
-        fig,ax = imshow1(inf, pxscl=pxscl, patches=[patches.Circle((0,0), rcoupled, fill=False, color='c')], 
+        fig,ax = imshows.imshow1(inf, pxscl=pxscl, patches=[patches.Circle((0,0), rcoupled, fill=False, color='c')], 
                             display_fig=False, return_fig=True)
         ticks = np.linspace(-ext.value/2, ext.value/2, 5)
         ax.set_xticks(ticks)
@@ -57,9 +55,9 @@ def make_gaussian_inf_fun(act_spacing=300e-6*u.m, sampling=25, coupling=0.15,
         inf_hdu = fits.PrimaryHDU(data=inf, header=hdr)
         inf_hdu.writeto(str(save_fits), overwrite=True)
 
-    return inf, sampling
+    return xp.array(inf), sampling
 
-class DeformableMirror():
+class DeformableMirror(poppy.AnalyticOpticalElement):
     
     
     def __init__(self, 
@@ -67,6 +65,8 @@ class DeformableMirror():
                  act_spacing=300e-6*u.m,
                  pupil_diam=11.1*u.mm,
                  full_stroke=1.5e-6*u.m,
+                 aperture=None,
+                 include_reflection=True,
                  inf_fun=None,
                  inf_cube=None,
                  inf_sampling=None,
@@ -115,6 +115,13 @@ class DeformableMirror():
         
 #         self.Nact_per_inf = (self.inf_fun.shape[0]-1)/self.inf_sampling # number of actuators across one influence function grid
         self.inf_pixelscale = self.act_spacing/(self.inf_sampling*u.pix)
+
+        self.include_reflection = include_reflection
+        print('Using reflection when computing OPD.')
+
+        self.aperture = aperture
+        self.planetype = poppy.poppy_core.PlaneType.intermediate
+        self.name = 'DM'
         
     @property
     def command(self):
@@ -166,40 +173,47 @@ class DeformableMirror():
         return
         
     def get_surface(self, pixelscale=None):
-        
         surf = self.inf_matrix.dot(self.actuators).reshape(self.inf_cube.shape[1], self.inf_cube.shape[1])
         
         if pixelscale is None:
             return surf
         else:
-            surf = self.interp_surf(surf, self.inf_pixelscale.to_value(u.m/u.pix), pixelscale.to_value(u.m/u.pix))
+            surf = interp_arr(surf, self.inf_pixelscale.to_value(u.m/u.pix), pixelscale.to_value(u.m/u.pix), order=3)
             return surf
     
-    def interp_surf(self, surf, pixelscale, new_pixelscale):
-        Nold = surf.shape[0]
-        old_xmax = pixelscale * Nold/2
+    # METHODS TO BE COMPATABLE WITH POPPY
+    def get_phasor(self, wave):
+        """
+        Compute the amplitude transmission appropriate for a vortex for
+        some given pixel spacing corresponding to the supplied Wavefront
+        """
 
-        x,y = xp.ogrid[-old_xmax:old_xmax-pixelscale:Nold*1j,
-                       -old_xmax:old_xmax-pixelscale:Nold*1j]
+        assert (wave.planetype != poppy.poppy_core.PlaneType.image)
 
-        Nnew = int(np.ceil(2*old_xmax/new_pixelscale)) - 1
-        new_xmax = new_pixelscale * Nnew/2
+        dm_phasor = self.get_transmission(wave) * xp.exp(1j * 2*np.pi/wave.wavelength.to_value(u.m) * self.get_opd(wave))
 
-        newx,newy = xp.mgrid[-new_xmax:new_xmax-new_pixelscale:Nnew*1j,
-                             -new_xmax:new_xmax-new_pixelscale:Nnew*1j]
+        return dm_phasor
 
-        x0 = x[0,0]
-        y0 = y[0,0]
-        dx = x[1,0] - x0
-        dy = y[0,1] - y0
+    def get_opd(self, wave):
+        
+        opd = self.get_surface(pixelscale=wave.pixelscale)
 
-        ivals = (newx - x0)/dx
-        jvals = (newy - y0)/dy
+        opd = pad_or_crop(opd, wave.shape[0])
 
-        coords = xp.array([ivals, jvals])
+        if self.include_reflection:
+            opd *= 2
 
-        interped_arr = _scipy.ndimage.map_coordinates(surf, coords, order=3)
-        return interped_arr
+        return opd
+
+    def get_transmission(self, wave):
+        
+        if self.aperture is None:
+            trans = poppy.SquareAperture(size=self.pupil_diam).get_transmission(wave)
+        else:
+            trans = self.aperture.get_transmission(wave)
+            
+        return trans
+        
         
 
 

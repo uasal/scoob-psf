@@ -264,38 +264,38 @@ class SCOOB():
         wavefront *= xp.exp(1j*2*np.pi/self.wavelength.to_value(u.m) * dm_surf)
         return wavefront
     
-    def propagate(self):
-        self.init_grids()
+#     def propagate(self):
+#         self.init_grids()
         
-        WFE = xp.ones((self.N, self.N), dtype=xp.complex128) if self.WFE is None else self.WFE
-        FPM = xp.ones((self.N, self.N), dtype=xp.complex128) if self.FPM is None else self.FPM
-        LYOT = xp.ones((self.N, self.N), dtype=xp.complex128) if self.LYOT is None else self.LYOT
+#         WFE = xp.ones((self.N, self.N), dtype=xp.complex128) if self.WFE is None else self.WFE
+#         FPM = xp.ones((self.N, self.N), dtype=xp.complex128) if self.FPM is None else self.FPM
+#         LYOT = xp.ones((self.N, self.N), dtype=xp.complex128) if self.LYOT is None else self.LYOT
         
-        self.wavefront = xp.ones((self.N,self.N), dtype=xp.complex128)
-        self.wavefront *= self.PUPIL # apply the pupil
+#         self.wavefront = xp.ones((self.N,self.N), dtype=xp.complex128)
+#         self.wavefront *= self.PUPIL # apply the pupil
         
-        self.wavefront *= WFE # apply WFE data
-        self.wavefront = self.apply_dm(self.wavefront)# apply the DM
+#         self.wavefront *= WFE # apply WFE data
+#         self.wavefront = self.apply_dm(self.wavefront)# apply the DM
         
-        if self.FPM is not None: 
-            self.wavefront = fft(self.wavefront)
-            self.wavefront *= FPM
-            self.wavefront = ifft(self.wavefront)
+#         if self.FPM is not None: 
+#             self.wavefront = fft(self.wavefront)
+#             self.wavefront *= FPM
+#             self.wavefront = ifft(self.wavefront)
     
-#         imshows.imshow1(xp.abs(self.wavefront))
-        self.wavefront *= LYOT # apply the Lyot stop
+# #         imshows.imshow1(xp.abs(self.wavefront))
+#         self.wavefront *= LYOT # apply the Lyot stop
         
-        # propagate to image plane with MFT
-        self.nlamD = self.npsf * self.psf_pixelscale_lamD * self.oversample
-        self.wavefront = mft(self.wavefront, self.nlamD, self.npsf)
+#         # propagate to image plane with MFT
+#         self.nlamD = self.npsf * self.psf_pixelscale_lamD * self.oversample
+#         self.wavefront = mft(self.wavefront, self.nlamD, self.npsf)
         
-        if self.Imax_ref is not None:
-            self.wavefront /= xp.sqrt(self.Imax_ref)
+#         if self.Imax_ref is not None:
+#             self.wavefront /= xp.sqrt(self.Imax_ref)
         
-        if self.reverse_parity:
-            self.wavefront = xp.rot90(xp.rot90(self.wavefront))
+#         if self.reverse_parity:
+#             self.wavefront = xp.rot90(xp.rot90(self.wavefront))
         
-        return self.wavefront
+#         return self.wavefront
     
     def propagate(self, return_all=False):
         self.init_grids()

@@ -4,12 +4,13 @@ from astropy.io import fits
 import time
 import os
 from pathlib import Path
-import ray
+
+import poppy
 
 import scoobpsf
 module_path = Path(os.path.dirname(os.path.abspath(scoobpsf.__file__)))
 
-from . import imshows
+from .imshows import *
 from . import jax_dm
 
 import jax
@@ -20,10 +21,6 @@ device = jax.devices()[0].device_kind
 
 print(f'Jax platform: {platform}')
 print(f'Jax device: {device}')
-
-'''
-FIXME: This file will eventually contain a compact model of SCOOB similar to how FALCO uses a compact model to compute Jacobians
-'''
 
 # MISCELLANEOUS FUNCTIONS
 def ensure_np_array(arr):
@@ -51,20 +48,59 @@ def pad_or_crop( arr_in, npix ):
 
 # MAKE OPTICAL ELEMENT FUNCTIONS
 
-def make_pupil(pupil_diam, npix, oversample):
-    
-    return pupil
+def lstsq(modes, data):
+    """Least-Squares fit of modes to data.
 
-def make_vortex_phase_mask(npix, oversample, 
+    Parameters
+    ----------
+    modes : iterable
+        modes to fit; sequence of ndarray of shape (m, n)
+    data : numpy.ndarray
+        data to fit, of shape (m, n)
+        place NaN values in data for points to ignore
+
+    Returns
+    -------
+    numpy.ndarray
+        fit coefficients
+
+    """
+    mask = jnp.isfinite(data)
+    data = data[mask]
+    modes = jnp.asarray(modes)
+    modes = modes.reshape((modes.shape[0], -1))  # flatten second dim
+    modes = modes[:, mask.ravel()].T  # transpose moves modes to columns, as needed for least squares fit
+    c, *_ = jnp.linalg.lstsq(modes, data, rcond=None)
+    return c
+
+
+def make_focal_grid(npix, oversample, polar=True):
+    
+    N = int(npix*oversample)
+    pxscl = 1/oversample
+    
+    xx = (jnp.linspace(0, N-1, N) - N/2 + 1/2)*pxscl
+    x,y = jnp.meshgrid(xx,xx)
+
+    if polar:
+        r = jnp.sqrt(x**2 + y**2)
+        th = jnp.arctan2(y,x)
+        focal_grid = jnp.array([r,th])
+    else:
+        focal_grid = jnp.array([x,y])
+
+    return focal_grid
+
+def make_vortex_phase_mask(focal_grid_polar,
                            charge=6, 
                            singularity=None, 
                            focal_length=500*u.mm, pupil_diam=9.7*u.mm, wavelength=632.8*u.nm):
     
-    N = int(npix*oversample)
-    
     r = focal_grid_polar[0]
     th = focal_grid_polar[1]
     
+    N = th.shape[0]
+
     phasor = jnp.exp(1j*charge*th)
     
     if singularity is not None:
@@ -74,7 +110,6 @@ def make_vortex_phase_mask(npix, oversample,
     
     return phasor
 
-import poppy
 def generate_wfe(diam, 
                  opd_index=2.5, amp_index=2, 
                  opd_seed=1234, amp_seed=12345,
@@ -85,14 +120,34 @@ def generate_wfe(diam,
     wfe_opd = poppy.StatisticalPSDWFE(index=opd_index, wfe=opd_rms, radius=diam/2, seed=opd_seed).get_opd(wf)
     wfe_amp = poppy.StatisticalPSDWFE(index=amp_index, wfe=amp_rms, radius=diam/2, seed=amp_seed).get_opd(wf)
     wfe_amp /= amp_rms.unit.to(u.m)
-    wfe_amp += 1 - amp_rms.to_value(u.m)/amp_rms.unit.to(u.m)
+    # wfe_amp += 1
     
     wfe_amp = jnp.asarray(wfe_amp.get())
     wfe_opd = jnp.asarray(wfe_opd.get())
+
+    mask = poppy.CircularAperture(radius=diam/2).get_transmission(wf).get()>0
+    # imshow1(mask)
+    Zs = poppy.zernike.arbitrary_basis(mask, nterms=3, outside=0).get()
+    # imshow3(Zs[0], Zs[1], Zs[2])
+    
+    Zc_amp = lstsq(Zs, wfe_amp)
+    Zc_opd = lstsq(Zs, wfe_opd)
+    for i in range(3):
+        wfe_amp -= Zc_amp[i] * Zs[i]
+        wfe_opd -= Zc_opd[i] * Zs[i]
+    wfe_amp += 1
+
     wfe = wfe_amp * jnp.exp(1j*2*np.pi/wavelength.to_value(u.m) * wfe_opd)
     wfe *= jnp.asarray(poppy.CircularAperture(radius=diam/2).get_transmission(wf).get())
     
     return wfe
+
+def make_pupil(pupil_diam, npix, oversample, ratio=1):
+    wf = poppy.FresnelWavefront(beam_radius=pupil_diam/2, npix=npix, oversample=oversample)
+    circ = poppy.CircularAperture(radius=ratio*pupil_diam/2)
+    pupil = circ.get_transmission(wf).get()
+
+    return jnp.array(pupil)
 
 # PROPAGATION FUNCTIONS
 
@@ -164,22 +219,37 @@ def mft(wavefront, nlamD, npix, forward=True, centering='ADJUSTABLE'):
     
 # DM Functions    
 
-def apply_dm(self, wavefront, include_reflection=True):
-    dm_surf = self.get_dm_surface()
+def apply_dm(wavefront, ):
+
+    dm_surf = get_dm_surface()
     if include_reflection:
         dm_surf *= 2
-    dm_surf = pad_or_crop(dm_surf, self.N)
-    wavefront *= jnp.exp(1j*2*np.pi/self.wavelength.to_value(u.m) * dm_surf)
+    dm_surf = pad_or_crop(dm_surf, N)
+    wavefront *= jnp.exp(1j*2*np.pi/wavelength.to_value(u.m) * dm_surf)
     return wavefront
     
 
-def forward_model(wavefront, WFE, FPM, LYOT, oversample, npsf=200, pixelscale_lamD=1/5, Imax_ref=1):
+def forward_model(wavefront, WFE, FPM, LYOT,
+                  actuators, inf_matrix, inf_pixelscale,
+                  npix, oversample, 
+                  pupil_diam=6.75*u.mm, npsf=200, pixelscale_lamD=1/5, 
+                  dm_fill_factor=0.94, dm_active_diam=10.2*u.mm,
+                  Imax_ref=1):
+
+        N = int(npix*oversample)
+        pupil_pxscl = pupil_diam/(npix*u.pix)
+        # imshow1(wavefront, npix=npix)
         wavefront *= WFE # apply WFE data
-#         self.wavefront = self.apply_dm(self.wavefront)# apply the DM
-         
-        wavefront = fft(self.wavefront)
+
+        dm_pixelscale = dm_fill_factor * dm_active_diam/(npix*u.pix)
+        dm_phasor = jax_dm.get_phasor(actuators, inf_matrix, inf_pixelscale=inf_pixelscale, pixelscale=dm_pixelscale)
+        dm_phasor = pad_or_crop(dm_phasor, N)
+        # imshow1(jnp.angle(dm_phasor), npix=npix)
+        wavefront *= dm_phasor
+        
+        wavefront = fft(wavefront)
         wavefront *= FPM
-        wavefront = ifft(self.wavefront)
+        wavefront = ifft(wavefront)
     
         wavefront *= LYOT # apply the Lyot stop
         
@@ -192,11 +262,22 @@ def forward_model(wavefront, WFE, FPM, LYOT, oversample, npsf=200, pixelscale_la
         return wavefront
 
     
-def snap(self, plot=False, vmax=None, vmin=None, grid=False):
-        fpwf = forward_model()
-        image = xp.abs(fpwf)**2
+def snap(wavefront, WFE, FPM, LYOT,
+        actuators, inf_matrix, inf_pixelscale,
+        npix, oversample, 
+        pupil_diam=6.75*u.mm, npsf=200, pixelscale_lamD=1/5, 
+        dm_fill_factor=0.94, dm_active_diam=10.2*u.mm,
+        Imax_ref=1,
+         plot=False, vmax=None, vmin=None, grid=False):
+        fpwf = forward_model(wavefront, WFE, FPM, LYOT,
+                             actuators, inf_matrix, inf_pixelscale,
+                             npix, oversample, 
+                             pupil_diam=pupil_diam, npsf=npsf, pixelscale_lamD=pixelscale_lamD, 
+                             dm_fill_factor=dm_fill_factor, dm_active_diam=dm_active_diam,
+                             Imax_ref=Imax_ref)
+        image = jnp.abs(fpwf)**2
         if plot:
-            imshows.imshow1(ensure_np_array(image), pxscl=self.psf_pixelscale_lamD,
+            imshow1(image, pxscl=pixelscale_lamD,
                             lognorm=True, vmax=vmax, vmin=vmin,
                             grid=grid)
         return image
