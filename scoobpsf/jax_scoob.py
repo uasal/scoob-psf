@@ -10,6 +10,7 @@ import poppy
 import scoobpsf
 module_path = Path(os.path.dirname(os.path.abspath(scoobpsf.__file__)))
 
+from .math_module import cupy_avail, jax_avail, ensure_np_array
 from .imshows import *
 from . import jax_dm
 
@@ -23,13 +24,13 @@ print(f'Jax platform: {platform}')
 print(f'Jax device: {device}')
 
 # MISCELLANEOUS FUNCTIONS
-def ensure_np_array(arr):
-    if isinstance(arr, np.ndarray):
-        return arr
-    elif isinstance(arr, jax.numpy.ndarray):
-        return np.asarray(arr)
-    elif isinstance(arr, cp.ndarray):
-        return arr.get()
+# def ensure_np_array(arr):
+#     if isinstance(arr, np.ndarray):
+#         return arr
+#     elif isinstance(arr, jax.numpy.ndarray):
+#         return np.asarray(arr)
+#     elif isinstance(arr, cp.ndarray):
+#         return arr.get()
 
 def pad_or_crop( arr_in, npix ):
     n_arr_in = arr_in.shape[0]
@@ -113,21 +114,23 @@ def make_vortex_phase_mask(focal_grid_polar,
 def generate_wfe(diam, 
                  opd_index=2.5, amp_index=2, 
                  opd_seed=1234, amp_seed=12345,
-                 opd_rms=10*u.nm, amp_rms=0.05*u.nm,
+                 opd_rms=10*u.nm, amp_rms=0.05,
                  npix=256, oversample=4, 
                  wavelength=500*u.nm):
+    amp_rms *= u.nm
     wf = poppy.FresnelWavefront(beam_radius=diam/2, npix=npix, oversample=oversample, wavelength=wavelength)
     wfe_opd = poppy.StatisticalPSDWFE(index=opd_index, wfe=opd_rms, radius=diam/2, seed=opd_seed).get_opd(wf)
     wfe_amp = poppy.StatisticalPSDWFE(index=amp_index, wfe=amp_rms, radius=diam/2, seed=amp_seed).get_opd(wf)
+    # print(wfe_amp)
     wfe_amp /= amp_rms.unit.to(u.m)
     # wfe_amp += 1
     
-    wfe_amp = jnp.asarray(wfe_amp.get())
-    wfe_opd = jnp.asarray(wfe_opd.get())
+    wfe_amp = jnp.asarray(ensure_np_array(wfe_amp))
+    wfe_opd = jnp.asarray(ensure_np_array(wfe_opd))
 
-    mask = poppy.CircularAperture(radius=diam/2).get_transmission(wf).get()>0
+    mask = ensure_np_array(poppy.CircularAperture(radius=diam/2).get_transmission(wf))>0
     # imshow1(mask)
-    Zs = poppy.zernike.arbitrary_basis(mask, nterms=3, outside=0).get()
+    Zs = ensure_np_array(poppy.zernike.arbitrary_basis(mask, nterms=3, outside=0))
     # imshow3(Zs[0], Zs[1], Zs[2])
     
     Zc_amp = lstsq(Zs, wfe_amp)
@@ -138,14 +141,14 @@ def generate_wfe(diam,
     wfe_amp += 1
 
     wfe = wfe_amp * jnp.exp(1j*2*np.pi/wavelength.to_value(u.m) * wfe_opd)
-    wfe *= jnp.asarray(poppy.CircularAperture(radius=diam/2).get_transmission(wf).get())
+    wfe *= jnp.asarray(ensure_np_array(poppy.CircularAperture(radius=diam/2).get_transmission(wf)))
     
     return wfe
 
 def make_pupil(pupil_diam, npix, oversample, ratio=1):
     wf = poppy.FresnelWavefront(beam_radius=pupil_diam/2, npix=npix, oversample=oversample)
     circ = poppy.CircularAperture(radius=ratio*pupil_diam/2)
-    pupil = circ.get_transmission(wf).get()
+    pupil = ensure_np_array(circ.get_transmission(wf))
 
     return jnp.array(pupil)
 

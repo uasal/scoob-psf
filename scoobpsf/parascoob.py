@@ -1,11 +1,15 @@
 import numpy as np
-import cupy as cp
+# import cupy as cp
 import astropy.units as u
 from astropy.io import fits
 import time
 import os
 from pathlib import Path
-import ray
+
+try:
+    import ray
+except ImportError:
+    print('Unable to import ray; no parallelized propagation functionality available.')
 
 from .math_module import xp,_scipy, ensure_np_array
 from . import imshows

@@ -1,5 +1,5 @@
 import numpy as np
-import cupy as cp
+# import cupy as cp
 import astropy.units as u
 from astropy.io import fits
 import time

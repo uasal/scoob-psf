@@ -7,6 +7,7 @@ try:
     import cupyx.scipy
     cupy_avail = True
 except ImportError:
+    print('Cupy unavailable; computations will not be performed using GPU with CuPy.')
     cupy_avail = False
     
 try:
@@ -14,6 +15,7 @@ try:
     import jax.scipy
     jax_avail = True
 except ImportError:
+    print('Jax available; Jax model can be used.')
     jax_avail = False
 
 class np_backend:
@@ -58,7 +60,7 @@ def ensure_np_array(arr):
         return arr
     elif jax_avail and isinstance(arr, jax.numpy.ndarray):
         return np.asarray(arr)
-    else:
+    elif cupy_avail and isinstance(arr, cupy.ndarray):
         return arr.get()
         
 # def vectorize(arr, mask):
