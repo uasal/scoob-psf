@@ -8,6 +8,7 @@ from pathlib import Path
 import copy
 
 from .math_module import xp,_scipy, ensure_np_array
+from .import dm
 from . import imshows
 import scoobpsf
 module_path = Path(os.path.dirname(os.path.abspath(scoobpsf.__file__)))
@@ -37,7 +38,7 @@ class SCOOBM():
                  use_pupil_grating=False,
                  use_aps=False,
                  inf_fun=None,
-                 dm_ref=np.zeros((34,34)),
+                 dm_ref=xp.zeros((34,34)),
                  bad_acts=None,
                  OPD=None,
                  RETRIEVED=None,
@@ -91,7 +92,7 @@ class SCOOBM():
             self.psf_pixelscale_lamD = (1/(5)) * self.psf_pixelscale.to(u.m/u.pix).value/4.63e-6
         else:
             self.psf_pixelscale_lamD = psf_pixelscale_lamD
-            self.psf_pixelscale = 4.63e-6*u.m/u.pix / self.psf_pixelscale_lamD/(1/5)
+            self.psf_pixelscale = 4.63e-6*u.m/u.pix * self.psf_pixelscale_lamD/(1/5)
         self.norm = 'first' # This is the normalization that POPPY uses in propagating a wavefront
         
         self.det_rotation = det_rotation
@@ -115,7 +116,7 @@ class SCOOBM():
         self.inf_fun = str(module_path/'inf.fits') if inf_fun is None else inf_fun
         self.bad_acts = bad_acts
         self.init_dm()
-        self.dm_ref = ensure_np_array(dm_ref)
+        self.dm_ref = dm_ref
         self.set_dm(dm_ref)
         
     
@@ -127,64 +128,71 @@ class SCOOBM():
         setattr(self, attr, val)
 
     def init_dm(self):
-        self.Nact = 34
-        self.act_spacing = 300e-6*u.m
-        self.dm_active_diam = 10.2*u.mm
-        self.dm_full_diam = 11.1*u.mm
+        # self.Nact = 34
+        # self.act_spacing = 300e-6*u.m
+        # self.dm_active_diam = 10.2*u.mm
+        # self.dm_full_diam = 11.1*u.mm
         
-        self.full_stroke = 1.5e-6*u.m
+        # self.full_stroke = 1.5e-6*u.m
         
-        self.dm_mask = np.ones((self.Nact,self.Nact), dtype=bool)
+        # self.dm_mask = xp.ones((self.Nact,self.Nact), dtype=bool)
 
-        xx = (np.linspace(0, self.Nact-1, self.Nact) - self.Nact/2 + 1/2) * self.act_spacing.to(u.mm).value*2
-        x,y = np.meshgrid(xx,xx)
-        r = np.sqrt(x**2 + y**2)
-        self.dm_mask[r>10.5] = 0 # had to set the threshold to 10.5 instead of 10.2 to include edge actuators
+        # xx = (np.linspace(0, self.Nact-1, self.Nact) - self.Nact/2 + 1/2) * self.act_spacing.to(u.mm).value*2
+        # x,y = np.meshgrid(xx,xx)
+        # r = np.sqrt(x**2 + y**2)
+        # self.dm_mask[r>10.5] = 0 # had to set the threshold to 10.5 instead of 10.2 to include edge actuators
         
-        self.dm_bad_act_mask = copy.deepcopy(self.dm_mask)
-        if self.bad_acts is not None:
-            for act in self.bad_acts:
-                self.dm_bad_act_mask[act] = False # bad actuators are False - a bit confusing but helps code
+        # self.dm_bad_act_mask = copy.deepcopy(self.dm_mask)
+        # if self.bad_acts is not None:
+        #     for act in self.bad_acts:
+        #         self.dm_bad_act_mask[act] = False # bad actuators are False - a bit confusing but helps code
 
-        self.dm_zernikes = ensure_np_array(poppy.zernike.arbitrary_basis(xp.array(self.dm_mask), nterms=15, outside=0))
+        # self.dm_zernikes = poppy.zernike.arbitrary_basis(xp.array(self.dm_mask), nterms=15, outside=0)
 
-        self.DM = poppy.ContinuousDeformableMirror(dm_shape=(self.Nact,self.Nact), name='DM', 
-                                                   actuator_spacing=self.act_spacing, 
-                                                   influence_func=self.inf_fun,
-                                                  )
+        # self.DM = poppy.ContinuousDeformableMirror(dm_shape=(self.Nact,self.Nact), name='DM', 
+        #                                            actuator_spacing=self.act_spacing, 
+        #                                            influence_func=self.inf_fun,
+        #                                           )
+        self.DM = dm.DeformableMirror()
+
+        self.Nact = self.DM.Nact
+        self.Nacts = self.DM.Nacts
+        self.act_spacing = self.DM.act_spacing
+        self.dm_active_diam = self.DM.active_diam
+        self.dm_full_diam = self.DM.pupil_diam
+        
+        self.full_stroke = self.DM.full_stroke
+        
+        self.dm_mask = self.DM.dm_mask
         
     def reset_dm(self):
         self.set_dm(self.dm_ref)
     
     def zero_dm(self):
-        self.set_dm(np.zeros((34,34)))
+        # self.DM.set_surface(np.zeros((34,34)))
+        self.DM.command = xp.zeros((self.Nact,self.Nact))
         
     def set_dm(self, dm_command):
-        self.DM.set_surface(ensure_np_array(dm_command))
+        # self.DM.set_surface(ensure_np_array(dm_command))
+        self.DM.command = dm_command
         
     def add_dm(self, dm_command):
-        self.DM.set_surface(self.get_dm() + ensure_np_array(dm_command))
+        # self.DM.set_surface(ensure_np_array(self.get_dm()) + ensure_np_array(dm_command))
+        self.DM.command = self.get_dm() + dm_command
         
     def get_dm(self):
-        return ensure_np_array(self.DM.surface)
+        # return self.DM.surface
+        return self.DM.command
     
     def map_acts_to_dm(self, act_values):
-        command = np.zeros((self.Nact, self.Nact))
-        command.ravel()[self.dm_bad_act_mask.ravel()] = ensure_np_array(act_values)
+        command = xp.zeros((self.Nact, self.Nact))
+        command.ravel()[self.dm_bad_act_mask.ravel()] = act_values
 
         return command
     
     def map_dm_to_acts(self, command):
         acts = command[self.dm_mask]
         return acts
-    
-    def show_dm(self):
-        wf = poppy.FresnelWavefront(beam_radius=self.dm_active_diam/2, npix=self.npix, oversample=1)
-        dm_command = self.get_dm()
-        dm_surface = self.DM.get_opd(wf).get() if poppy.accel_math._USE_CUPY else self.DM.get_opd(wf)
-        surf_ext = wf.pixelscale.to_value(u.mm/u.pix)*self.npix/2
-        
-        imshows.imshow2(dm_command, dm_surface, 'DM Command', 'DM Surface')
     
     def init_inwave(self):
         self.pupil_diam = 6.8*u.mm

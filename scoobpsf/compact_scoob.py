@@ -1,10 +1,8 @@
 import numpy as np
 import astropy.units as u
 from astropy.io import fits
-import time
 import os
 from pathlib import Path
-import ray
 import copy
 
 from skimage.filters import threshold_otsu
@@ -12,7 +10,7 @@ from skimage.filters import threshold_otsu
 import scoobpsf
 module_path = Path(os.path.dirname(os.path.abspath(scoobpsf.__file__)))
 
-from .import custom_dm
+from .import dm
 from .math_module import xp,_scipy, ensure_np_array
 from . import imshows
 from . import utils
@@ -32,26 +30,6 @@ def make_vortex_phase_mask(focal_grid_polar, charge=6,
         phasor *= mask
     
     return phasor
-
-import poppy
-def generate_wfe(diam, distance=100*u.mm, 
-                 opd_index=2.5, amp_index=2, 
-                 opd_seed=1234, amp_seed=12345,
-                 opd_rms=10*u.nm, amp_rms=0.05*u.nm,
-                 npix=256, oversample=4, 
-                 wavelength=500*u.nm):
-    wf = poppy.FresnelWavefront(beam_radius=diam/2, npix=npix, oversample=oversample, wavelength=wavelength)
-    wfe_opd = poppy.StatisticalPSDWFE(index=opd_index, wfe=opd_rms, radius=diam/2, seed=opd_seed).get_opd(wf)
-    wfe_amp = poppy.StatisticalPSDWFE(index=amp_index, wfe=amp_rms, radius=diam/2, seed=amp_seed).get_opd(wf)
-    wfe_amp /= amp_rms.unit.to(u.m)
-    wfe_amp += 1 - amp_rms.to_value(u.m)/amp_rms.unit.to(u.m)/2
-    
-    wfe_amp = xp.asarray(wfe_amp.get())
-    wfe_opd = xp.asarray(wfe_opd.get())
-    wfe = wfe_amp * xp.exp(1j*2*np.pi/wavelength.to_value(u.m) * wfe_opd)
-    wfe *= xp.asarray(poppy.CircularAperture(radius=diam/2).get_transmission(wf).get())
-    
-    return wfe
 
 def fft(arr):
     ftarr = xp.fft.fftshift(xp.fft.fft2(xp.fft.ifftshift(arr)))
@@ -131,12 +109,14 @@ class SCOOB():
                  detector_rotation=0, 
                  dm_ref=np.zeros((34,34)),
                  bad_acts=None,
-                 inf_cube=None,
                  inf_fun=None, # defaults to inf.fits
+                 inf_sampling=None,
+                 inf_cube=None,
                  Imax_ref=None,
                  WFE=None,
                  FPM=None,
-                 LYOT=None):
+                 LYOT=None,
+                 FIELDSTOP=None):
         
         self.wavelength_c = 632.8e-9*u.m
         if wavelength is None: 
@@ -159,19 +139,10 @@ class SCOOB():
         self.WFE = WFE
         self.FPM = FPM
         self.LYOT = LYOT
-        
+        self.FIELDSTOP = FIELDSTOP
+
         self.dm_fill_factor = dm_fill_factor # ratio for representing the illuminated area of the DM to accurately compute DM surface
         self.reverse_parity = True
-        
-        if inf_cube is None and inf_fun is None: # dedaults to inf_cube.fits
-            self.inf_cube = str(module_path/'inf_cube.fits')
-            self.inf_fun = None
-        elif inf_cube is not None and inf_fun is None: # uses supplied inf_cube
-            self.inf_cube = inf_cube
-            self.inf_fun = None
-        elif inf_cube is None and inf_fun is not None:
-            self.inf_cube=None
-            self.inf_fun = inf_fun 
 
         self.bad_acts = bad_acts
         self.init_dm()
@@ -184,24 +155,20 @@ class SCOOB():
         return getattr(self, attr)
 
     def init_dm(self):
-        self.Nact = 34
-        self.Nacts = 952
-        self.act_spacing = 300e-6*u.m
-        self.dm_active_diam = 10.2*u.mm
-        self.dm_full_diam = 11.1*u.mm
+        self.DM = dm.DeformableMirror()
+
+        self.Nact = self.DM.Nact
+        self.Nacts = self.DM.Nacts
+        self.act_spacing = self.DM.act_spacing
+        self.dm_active_diam = self.DM.active_diam
+        self.dm_full_diam = self.DM.pupil_diam
         
-        self.full_stroke = 1.5e-6*u.m
+        self.full_stroke = self.DM.full_stroke
         
-        self.dm_mask = np.ones((self.Nact,self.Nact), dtype=bool)
-        xx = (np.linspace(0, self.Nact-1, self.Nact) - self.Nact/2 + 1/2) * self.act_spacing.to(u.mm).value*2
-        x,y = np.meshgrid(xx,xx)
-        r = np.sqrt(x**2 + y**2)
-        self.dm_mask[r>10.5] = 0 # had to set the threshold to 10.5 instead of 10.2 to include edge actuators
-        
-        self.DM = custom_dm.DeformableMirror(inf_cube=self.inf_cube, inf_fun=self.inf_fun)
+        self.dm_mask = self.DM.dm_mask
         
     def zero_dm(self):
-        self.set_dm(np.zeros((self.Nact,self.Nact)))
+        self.set_dm(xp.zeros((self.Nact,self.Nact)))
     
     def reset_dm(self):
         self.set_dm(self.dm_ref)
@@ -221,7 +188,7 @@ class SCOOB():
         self.DM.command += dm_command
         
     def get_dm(self):
-        return ensure_np_array(self.DM.command)
+        return self.DM.command
     
     def get_dm_surface(self):
         dm_pixelscale = self.dm_fill_factor * self.dm_active_diam/(self.npix*u.pix)
@@ -264,39 +231,6 @@ class SCOOB():
         wavefront *= xp.exp(1j*2*np.pi/self.wavelength.to_value(u.m) * dm_surf)
         return wavefront
     
-#     def propagate(self):
-#         self.init_grids()
-        
-#         WFE = xp.ones((self.N, self.N), dtype=xp.complex128) if self.WFE is None else self.WFE
-#         FPM = xp.ones((self.N, self.N), dtype=xp.complex128) if self.FPM is None else self.FPM
-#         LYOT = xp.ones((self.N, self.N), dtype=xp.complex128) if self.LYOT is None else self.LYOT
-        
-#         self.wavefront = xp.ones((self.N,self.N), dtype=xp.complex128)
-#         self.wavefront *= self.PUPIL # apply the pupil
-        
-#         self.wavefront *= WFE # apply WFE data
-#         self.wavefront = self.apply_dm(self.wavefront)# apply the DM
-        
-#         if self.FPM is not None: 
-#             self.wavefront = fft(self.wavefront)
-#             self.wavefront *= FPM
-#             self.wavefront = ifft(self.wavefront)
-    
-# #         imshows.imshow1(xp.abs(self.wavefront))
-#         self.wavefront *= LYOT # apply the Lyot stop
-        
-#         # propagate to image plane with MFT
-#         self.nlamD = self.npsf * self.psf_pixelscale_lamD * self.oversample
-#         self.wavefront = mft(self.wavefront, self.nlamD, self.npsf)
-        
-#         if self.Imax_ref is not None:
-#             self.wavefront /= xp.sqrt(self.Imax_ref)
-        
-#         if self.reverse_parity:
-#             self.wavefront = xp.rot90(xp.rot90(self.wavefront))
-        
-#         return self.wavefront
-    
     def propagate(self, return_all=False):
         self.init_grids()
         
@@ -306,7 +240,7 @@ class SCOOB():
         WFE = xp.ones((self.N, self.N), dtype=xp.complex128) if self.WFE is None else self.WFE
         FPM = xp.ones((self.N, self.N), dtype=xp.complex128) if self.FPM is None else self.FPM
         LYOT = xp.ones((self.N, self.N), dtype=xp.complex128) if self.LYOT is None else self.LYOT
-        
+
         self.wavefront = xp.ones((self.N,self.N), dtype=xp.complex128)
         self.wavefront *= self.PUPIL # apply the pupil
         if return_all: wavefronts.append(copy.copy(self.wavefront))
@@ -324,10 +258,18 @@ class SCOOB():
             if return_all: wavefronts.append(copy.copy(self.wavefront))
             self.wavefront = ifft(self.wavefront)
             if return_all: wavefronts.append(copy.copy(self.wavefront))
-        
+
         self.wavefront *= LYOT # apply the Lyot stop
         if return_all: wavefronts.append(copy.copy(self.wavefront))
-            
+        
+        if self.FIELDSTOP is not None:
+            self.wavefront = fft(self.wavefront)
+            if return_all: wavefronts.append(copy.copy(self.wavefront))
+            self.wavefront *= self.FIELDSTOP
+            if return_all: wavefronts.append(copy.copy(self.wavefront))
+            self.wavefront = ifft(self.wavefront)
+            if return_all: wavefronts.append(copy.copy(self.wavefront))
+
         # propagate to image plane with MFT
         self.nlamD = self.npsf * self.psf_pixelscale_lamD * self.oversample
         self.wavefront = mft(self.wavefront, self.nlamD, self.npsf)
@@ -339,7 +281,7 @@ class SCOOB():
             self.wavefront = xp.rot90(xp.rot90(self.wavefront))
             
         if self.det_rotation is not None:
-            self.wavefront = self.rotate_wf(self.wavefront)
+            self.wavefront = utils.rotate_arr(self.wavefront, rotation=self.det_rotation, order=3)
             
         if return_all: wavefronts.append(copy.copy(self.wavefront))
         
@@ -347,13 +289,6 @@ class SCOOB():
             return wavefronts
         else:
             return self.wavefront
-    
-    def rotate_wf(self, wavefront):
-        wavefront_r = _scipy.ndimage.rotate(xp.real(wavefront), angle=-self.det_rotation, reshape=False, order=1)
-        wavefront_i = _scipy.ndimage.rotate(xp.imag(wavefront), angle=-self.det_rotation, reshape=False, order=1)
-        
-        new_wavefront = (wavefront_r + 1j*wavefront_i)
-        return new_wavefront
     
     def calc_psf(self):
         fpwf = self.propagate(return_all=False)
@@ -369,75 +304,3 @@ class SCOOB():
         return image
 
 
-def process_pr_data(pr_amp, pr_phs, npup, pr_rotation, 
-                    pixelscale=None,
-                    N=None,
-                    amp_norm=1,
-                    remove_modes=None,
-                    ):
-    
-    if isinstance(pr_amp, str):
-        pr_amp = xp.array(fits.getdata(pr_amp))/amp_norm
-    if isinstance(pr_phs, str):
-        pr_phs = xp.array(fits.getdata(pr_phs))
-    # imshows.imshow2(pr_amp, pr_phs)
-
-    pr_amp = utils.pad_or_crop(pr_amp, npup)
-    pr_phs = utils.pad_or_crop(pr_phs, npup)
-    imshows.imshow2(pr_amp, pr_phs)
-
-    if remove_modes is not None:
-        thresh_mask = xp.array(pr_amp>threshold_otsu(pr_amp))
-        pr_phs[~thresh_mask] = xp.NaN
-        imshows.imshow2(thresh_mask, pr_phs)
-
-        Zs = poppy.zernike.arbitrary_basis(thresh_mask, nterms=remove_modes, outside=0)
-        imshows.imshow3(Zs[0], Zs[1], Zs[2])
-        
-        Zc = lstsq(ensure_np_array(Zs), ensure_np_array(pr_phs))
-
-        for i in range(remove_modes):
-            pr_phs -= Zc[i] * Zs[i]
-        pr_amp[~thresh_mask] = 0.0
-        pr_phs[~thresh_mask] = 0.0
-    imshows.imshow2(pr_amp, pr_phs)
-
-    pr_amp = _scipy.ndimage.rotate(pr_amp, angle=pr_rotation, reshape=False, order=3)
-    pr_phs = _scipy.ndimage.rotate(pr_phs, angle=pr_rotation, reshape=False, order=3)
-
-    if pixelscale is not None:
-        pr_amp = utils.interp_arr(pr_amp, (6.75*u.mm/(npup*u.pix)).to_value(u.m/u.pix), pixelscale.to_value(u.m/u.pix))
-        pr_phs = utils.interp_arr(pr_phs, (6.75*u.mm/(npup*u.pix)).to_value(u.m/u.pix), pixelscale.to_value(u.m/u.pix))
-    imshows.imshow2(pr_amp, pr_phs)
-
-    wfe = pr_amp*xp.exp(1j*pr_phs)
-
-    if N is not None:
-        utils.pad_or_crop(wfe, N)
-
-    return wfe
-
-def lstsq(modes, data):
-    """Least-Squares fit of modes to data.
-
-    Parameters
-    ----------
-    modes : iterable
-        modes to fit; sequence of ndarray of shape (m, n)
-    data : numpy.ndarray
-        data to fit, of shape (m, n)
-        place NaN values in data for points to ignore
-
-    Returns
-    -------
-    numpy.ndarray
-        fit coefficients
-
-    """
-    mask = np.isfinite(data)
-    data = data[mask]
-    modes = np.asarray(modes)
-    modes = modes.reshape((modes.shape[0], -1))  # flatten second dim
-    modes = modes[:, mask.ravel()].T  # transpose moves modes to columns, as needed for least squares fit
-    c, *_ = np.linalg.lstsq(modes, data, rcond=None)
-    return c
