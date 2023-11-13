@@ -291,12 +291,20 @@ def forward_model(wavefront, WFE, dm_phasor, FPM, LYOT,
         
         return wavefront
 
-def get_dm_phasor(actuators, inf_matrix, inf_pixelscale, npix,
-                  dm_active_diam=0.0102, dm_fill_factor=0.94,
-                  wavelength=650e-9):
-    surf = inf_matrix.dot(actuators).reshape(int(jnp.sqrt(inf_matrix.shape[0])), int(jnp.sqrt(inf_matrix.shape[0])))
-    opd = 2*interp_arr(surf, inf_pixelscale, dm_fill_factor * dm_active_diam/npix)
-    phasor = jnp.exp(1j*2*jnp.pi/wavelength * opd)
+def get_dm_phasor(command, 
+                  inf_fun, inf_sampling, inf_pixelscale,
+                  npix, dm_fill_factor,
+                  dm_active_diam=10.2*u.mm,
+                  wavelength=650e-9*u.m):
+    
+    pixelscale = dm_fill_factor * dm_active_diam/(npix*u.pix)
+
+    phasor = jax_dm.get_phasor(command, 
+                               inf_fun, inf_sampling, 
+                               inf_pixelscale=inf_pixelscale, 
+                               pixelscale=pixelscale,
+                               wavelength=wavelength)
+
     return phasor
 
 def snap(wavefront, WFE, dm_phasor, FPM, LYOT,

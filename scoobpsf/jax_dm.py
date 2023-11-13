@@ -173,30 +173,61 @@ def map_actuators_to_command(act_vector, dm_mask):
         command = command.at[dm_mask].set(act_vector)
         return command
 
-def get_surf(actuators, 
-             inf_matrix,
+def get_surf(command, 
+             inf_fun, inf_sampling,
              inf_pixelscale=None, pixelscale=None):
 
-    N = int(np.sqrt(inf_matrix.shape[0]))
-    surf = inf_matrix.dot(actuators).reshape(N, N)
+    Nact = command.shape[0]
+    if inf_pixelscale is None and pixelscale is None:
+        inf_sampling = inf_sampling
+        inf_fun = inf_fun
+    else: # interpolate the influence function to the desired pixelscale
+        scale = pixelscale.to_value(u.m/u.pix)/inf_pixelscale.to_value(u.m/u.pix)
+        inf_sampling = inf_sampling / scale
+        inf_fun = interp_arr(inf_fun, inf_pixelscale.to_value(u.m/u.pix), pixelscale.to_value(u.m/u.pix), order=1)
+        # inf_fun = interp_arr(self.inf_fun, scale)
+    print(inf_sampling)
+    xc = inf_sampling*(jnp.linspace(-Nact//2, Nact//2-1, Nact) + 1/2)
+    yc = inf_sampling*(jnp.linspace(-Nact//2, Nact//2-1, Nact) + 1/2)
 
-    if pixelscale is None and inf_pixelscale is None:
-        return surf
-    else:
-        surf = interp_arr(surf, inf_pixelscale.to_value(u.m/u.pix), pixelscale.to_value(u.m/u.pix), order=1)
-        return surf
+    oversample = 2
+    Nsurf = int(jnp.round(inf_sampling)*Nact*oversample)
 
-def get_opd(actuators, 
-            inf_matrix,
+    fx = xp.fft.fftfreq(Nsurf)
+    fy = xp.fft.fftfreq(Nsurf)
+
+    Mx = xp.exp(-1j*2*np.pi*xp.outer(fx,xc))
+    My = xp.exp(-1j*2*np.pi*xp.outer(yc,fy))
+
+    mft_command = Mx@command@My
+
+    fourier_inf_fun = jnp.fft.fft2(utils.pad_or_crop(inf_fun, Nsurf))
+    fourier_surf = fourier_inf_fun * mft_command
+    
+    surf = jnp.fft.ifft2(fourier_surf).real
+    surf = pad_or_crop(surf, Nsurf//2 + int(jnp.floor(inf_sampling)))
+
+    return surf
+
+    # N = int(np.sqrt(inf_matrix.shape[0]))
+    # surf = inf_matrix.dot(actuators).reshape(N, N)
+    # if pixelscale is None and inf_pixelscale is None:
+    #     return surf
+    # else:
+    #     surf = interp_arr(surf, inf_pixelscale.to_value(u.m/u.pix), pixelscale.to_value(u.m/u.pix), order=1)
+    #     return surf
+
+def get_opd(command, 
+            inf_fun, inf_sampling,
             inf_pixelscale=None, pixelscale=None):
-    opd = 2*get_surf(actuators, inf_matrix, inf_pixelscale, pixelscale)
+    opd = 2*get_surf(command, inf_fun, inf_sampling, inf_pixelscale, pixelscale)
     return opd
 
-def get_phasor(actuators, 
-               inf_matrix,
+def get_phasor(command, 
+               inf_fun, inf_sampling,
                inf_pixelscale=None, pixelscale=None,
                wavelength=650e-9*u.m):
-    opd = 2*get_surf(actuators, inf_matrix, inf_pixelscale, pixelscale)
+    opd = 2*get_surf(command, inf_fun, inf_sampling, inf_pixelscale, pixelscale)
     phasor = jnp.exp(1j*2*jnp.pi/wavelength.to_value(u.m) * opd)
     return phasor
 
