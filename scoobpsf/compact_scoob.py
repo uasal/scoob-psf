@@ -15,6 +15,8 @@ from .math_module import xp,_scipy, ensure_np_array
 from . import imshows
 from . import utils
 
+import hcipy
+from scipy.signal import windows
 
 def make_vortex_phase_mask(focal_grid_polar, charge=6, 
                            singularity=None, focal_length=500*u.mm, pupil_diam=9.7*u.mm, wavelength=632.8*u.nm):
@@ -26,7 +28,7 @@ def make_vortex_phase_mask(focal_grid_polar, charge=6,
     
     if singularity is not None:
 #         sing*D/(focal_length*lam)
-        mask = r>(singularity*pupil_diam/(focal_length*wavelength)).decompose()
+        mask = r>(singularity*pupil_diam/(focal_length*wavelength)).decompose().value
         phasor *= mask
     
     return phasor
@@ -42,7 +44,7 @@ def ifft(arr):
 def mft(wavefront, nlamD, npix, forward=True, centering='ADJUSTABLE'):
         '''
         npix : int
-            Number of pixels per side side of destination plane array (corresponds
+            Number of pixels per side of destination plane array (corresponds
             to 'N_B' in Soummer et al. 2007 4.2). This will be the # of pixels in
             the image plane for a forward transformation, in the pupil plane for an
             inverse.
@@ -231,6 +233,62 @@ class SCOOB():
         wavefront *= xp.exp(1j*2*np.pi/self.wavelength.to_value(u.m) * dm_surf)
         return wavefront
     
+    
+    def apply_vortex(self, pupil_wavefront, Nprops=4, window_size=32):
+
+        for i in range(Nprops):
+            if i==0: # this is the generic FFT step
+                focal_pixelscale_lamD = 1/self.oversample
+                x_fp = ( xp.linspace(-self.N/2, self.N/2-1, self.N) + 1/2 ) * focal_pixelscale_lamD
+                fpx, fpy = xp.meshgrid(x_fp, x_fp)
+                focal_grid = xp.array([xp.sqrt(fpx**2 + fpy**2), xp.arctan2(fpy,fpx)])
+
+                vortex = make_vortex_phase_mask(focal_grid, charge=6, )
+
+                wx = xp.array(windows.tukey(window_size, 1, False))
+                wy = xp.array(windows.tukey(window_size, 1, False))
+                w = xp.outer(wy, wx)
+                w = xp.pad(w, (focal_grid[0].shape[0] - w.shape[0]) // 2, 'constant')
+                vortex *= 1 - w
+                
+                next_pixelscale = w*focal_pixelscale_lamD/self.N # for the next propagation iteration
+
+                # E_LS = E_pup
+            else: # this will handle the MFT stages
+
+                mft_pixelscale_lamD = next_pixelscale
+                nmft = 128
+                nlamD = mft_pixelscale_lamD * nmft
+
+                x_fp = ( xp.linspace(-nmft/2, nmft/2-1, nmft) + 1/2 ) * mft_pixelscale_lamD
+                fpx, fpy = xp.meshgrid(x_fp, x_fp)
+                focal_grid = xp.array([xp.sqrt(fpx**2 + fpy**2), xp.arctan2(fpy,fpx)])
+
+                vortex = make_vortex_phase_mask(focal_grid, charge=6, )
+
+                wx = xp.array(windows.tukey(window_size, 1, False))
+                wy = xp.array(windows.tukey(window_size, 1, False))
+                w = xp.outer(wy, wx)
+                w = xp.pad(w, (focal_grid[0].shape[0] - w.shape[0]) // 2, 'constant')
+                vortex *= 1 - w
+
+                # take the MFT of the pupil_wavefront
+                mft(pupil_wavefront, nlamD, nmft, forward=True, centering='ADJUSTABLE')
+
+                # apply the windowed vortex
+
+
+
+                # take the inverse MFT to go back to the pupil plane
+
+                # adjust the pixelscale for the next iteration of propagation
+                next_pixelscale = mft_pixelscale_lamD/self.N # for the next propagation iteration
+
+                # add the new pupil wavefront to the total pupil wavefront
+                # E_LS += E_pup
+            
+        return
+
     def propagate(self, return_all=False):
         self.init_grids()
         

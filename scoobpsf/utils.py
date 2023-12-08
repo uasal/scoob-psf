@@ -99,7 +99,8 @@ def process_pr_data(pr_amp, pr_phs, npup, pr_rotation,
     if pixelscale is not None:
         pr_amp = interp_arr(pr_amp, (6.75*u.mm/(npup*u.pix)).to_value(u.m/u.pix), pixelscale.to_value(u.m/u.pix))
         pr_phs = interp_arr(pr_phs, (6.75*u.mm/(npup*u.pix)).to_value(u.m/u.pix), pixelscale.to_value(u.m/u.pix))
-    imshows.imshow2(pr_amp, pr_phs)
+    imshows.imshow2(pr_amp/2, pr_phs, 'Pupil Plane Amplitude', 'Pupil Plane Phase', 
+                    pxscl=6.75*u.mm/(npup*u.pix), xlabel='X [mm]')
 
     wfe = pr_amp*xp.exp(1j*pr_phs)
 
