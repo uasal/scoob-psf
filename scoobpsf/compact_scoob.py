@@ -41,6 +41,21 @@ def ifft(arr):
     iftarr = xp.fft.ifftshift(xp.fft.ifft2(xp.fft.fftshift(arr)))
     return iftarr
 
+# def mft(arr, npix, nmft, sampling):
+#     NA = arr.shape[0]
+#     NB = nmft
+
+#     u = xp.linspace(-1,1,NA)
+
+#     lim = ((nmft)/2) * sampling
+#     k = xp.linspace(-lim,lim,nmft)
+
+#     M = xp.exp(-1j*2*np.pi*xp.outer(u,k))
+#     print(M.shape, arr.shape, M.shape,)
+#     mft_arr = M.T @ arr @ M
+
+#     return mft_arr
+
 def mft(wavefront, nlamD, npix, forward=True, centering='ADJUSTABLE'):
         '''
         npix : int
