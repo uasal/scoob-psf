@@ -60,8 +60,7 @@ def move_pol(rel_pos): # this will change the throughput by rotating the polariz
 def move_fold(pos):
     # FIXME
     client['stagepiezo.stagefold_pos.current'] = pos
-    
-    
+
 # define more functions for moving the fold mirror, using the tip tilt mirror, and the polarizers
 
 class SCOOBI():
@@ -79,6 +78,12 @@ class SCOOBI():
                  max_ref=None,
                 ):
         
+        # FIXME: make the science camera such that it can be specified
+
+        # FIXME: add functionality to automatically subtract dark frames from newly captured frames
+
+        # FIXME: add functionality for fiber attenuator, include for normalization
+
         self.is_model = False
         
         self.wavelength_c = 633e-9*u.m
@@ -206,11 +211,11 @@ class SCOOBI():
         
         im = _scipy.ndimage.shift(im, (self.y_shift, self.x_shift), order=0)
         im = pad_or_crop(im, self.npsf)
-        if self.normalize and self.texp_ref is not None and self.max_ref is not None:
-            im *= (1/self.max_ref) * (self.texp_ref/self.texp)
+        if self.normalize and self.texp_ref is not None and self.Imax_ref is not None:
+            im *= (1/self.Imax_ref) * (self.texp_ref/self.texp)
             
         if plot:
-            imshows.imshow1(im, lognorm=True, pxscl=self.psf_pixelscale_lamD, grid=True, vmin=None)
+            imshows.imshow1(im, lognorm=True, pxscl=self.psf_pixelscale_lamD, grid=True, vmin=vmin)
         
         return im
     

@@ -8,8 +8,7 @@ from pathlib import Path
 import copy
 
 from .math_module import xp,_scipy, ensure_np_array
-from .import dm
-from . import imshows
+from .import dm, utils, imshows
 import scoobpsf
 module_path = Path(os.path.dirname(os.path.abspath(scoobpsf.__file__)))
 
@@ -24,12 +23,13 @@ class SCOOBM():
 
     def __init__(self, 
                  wavelength=632.8e-9*u.m, 
-                 npix=128, 
-                 oversample=2048/128,
+                 npix=256, 
+                 oversample=4,
+                 use_llowfsc=False,
                  npsf=400, 
                  psf_pixelscale=4.63e-6*u.m/u.pix,
                  psf_pixelscale_lamD=None,
-                 Imax_ref=None,
+                 Imax_ref=1,
                  det_rotation=0,
                  source_offset=(0,0),
                  use_synthetic_opds=False,
@@ -40,7 +40,6 @@ class SCOOBM():
                  inf_fun=None,
                  dm_ref=xp.zeros((34,34)),
                  bad_acts=None,
-                 OPD=None,
                  RETRIEVED=None,
                  ZWFS=None,
                  FPM=None,
@@ -107,15 +106,50 @@ class SCOOBM():
         self.use_aps = use_aps
         
         self.RETRIEVED = poppy.ScalarTransmission(name='Phase Retrieval Place-holder') if RETRIEVED is None else RETRIEVED
-        self.FPM = poppy.ScalarTransmission(name='FPM Place-holder') if FPM is None else FPM
+        self.FPM = poppy.ScalarTransmission(name='Focal Plane Mask Place-holder') if FPM is None else FPM
         self.LYOT = poppy.ScalarTransmission(name='Lyot Stop Place-holder') if LYOT is None else LYOT
         
         self.ZWFS = ZWFS
         
+        self.use_llowfsc = use_llowfsc
+        self.llowfsc_pixelscale = 3.76*u.um/u.pix # Sony IMX571
+        self.nllowfsc = 64
+        self.llowfsc_defocus = 2.5*u.mm
+
+        self.distances = {
+            ### FIXME: we should implement the distances as a dictionary that gets loaded in by a toml file
+        }
+
+        self.diams = {
+            ### FIXME
+        }
+
+        self.d_pupil_stop_flat = 42.522683120520355*u.mm
+        self.d_flat_oap1 = 89.33864507546247*u.mm
+        self.d_oap1_oap2 = 307.2973451416505*u.mm
+        self.d_oap2_DM = 168.84723167004802*u.mm + 0*u.mm
+        self.d_DM_oap3 = 460.43684751808945*u.mm
+        self.d_oap3_FPM = 462.6680664924039*u.mm
+        self.d_FPM_flat2 = 144.6375029385836*u.mm 
+        self.d_flat2_lens = 200*u.mm - 144.6375029385836*u.mm
+        self.d_lens_LYOT = 200*u.mm
+        self.d_LYOT_scicam = 150*u.mm
+        self.d_scicam_image = 150*u.mm
+
+        self.flat1_diam = self.pupil_diam
+        self.flat2_diam = 12.7*u.mm
+        self.oap1_diam = 25.4*u.mm
+        self.oap2_diam = 25.4*u.mm
+        self.oap3_diam = 25.4*u.mm
+
+        self.psd_index = 2.8
+        self.opd_rms = 12*u.nm
+
         # Load influence function
         self.inf_fun = str(module_path/'inf.fits') if inf_fun is None else inf_fun
         self.bad_acts = bad_acts
         self.init_dm()
+
         self.dm_ref = dm_ref
         self.set_dm(dm_ref)
         
@@ -162,7 +196,7 @@ class SCOOBM():
         self.dm_full_diam = self.DM.pupil_diam
         
         self.full_stroke = self.DM.full_stroke
-        
+
         self.dm_mask = self.DM.dm_mask
         
     def reset_dm(self):
@@ -221,16 +255,6 @@ class SCOOBM():
         elif self.use_synthetic_opds:
             s1, s2, s3, s4, s5, s6, s7 = (1,2,3,4,5,6,7)
             
-            self.psd_index = 2.8
-            self.opd_rms = 12*u.nm
-            
-            self.m3_diam = 25.4*u.mm
-            self.flat1_diam = self.pupil_diam
-            self.flat2_diam = 12.7*u.mm
-            self.oap1_diam = 25.4*u.mm
-            self.oap2_diam = 25.4*u.mm
-            self.oap3_diam = 25.4*u.mm
-            
             self.m3_opd = poppy.StatisticalPSDWFE(index=self.psd_index, wfe=self.opd_rms, radius=self.m3_diam/2, seed=s1)
             self.flat1_opd = poppy.StatisticalPSDWFE(index=self.psd_index, wfe=self.opd_rms, radius=self.flat1_diam/2, seed=s2)
             self.flat2_opd = poppy.StatisticalPSDWFE(index=self.psd_index, wfe=self.opd_rms, radius=self.flat2_diam/2, seed=s3)
@@ -240,7 +264,6 @@ class SCOOBM():
             print('Model using synthetic OPD data')
         else:
             print('No OPD data implemented into model.')
-    
     
     def init_pupil_grating(self):
         wf = poppy.FresnelWavefront(beam_radius=self.pupil_diam/2, npix=self.npix, oversample=1)
@@ -263,8 +286,6 @@ class SCOOBM():
         """
         roc: float
             parent parabola radius of curvature
-        angle: float
-            off-axis angle in radians
         oad: float
             off-axis distance
         """
@@ -277,31 +298,20 @@ class SCOOBM():
         RETRIEVED = poppy.ScalarTransmission() if self.RETRIEVED is None else self.RETRIEVED
         FPM = poppy.ScalarTransmission() if self.FPM is None else self.FPM
         LYOT = poppy.ScalarTransmission() if self.LYOT is None else self.LYOT
-        
-        d_pupil_stop_flat = 42.522683120520355*u.mm
-        d_flat_oap1 = 89.33864507546247*u.mm
-        d_oap1_oap2 = 307.2973451416505*u.mm
-        d_oap2_DM = 168.84723167004802*u.mm + 0*u.mm
-        d_DM_oap3 = 460.43684751808945*u.mm
-        d_oap3_FPM = 462.6680664924039*u.mm
-        d_FPM_flat2 = 144.6375029385836*u.mm 
-        d_flat2_lens = 200*u.mm - 144.6375029385836*u.mm
-        d_lens_LYOT = 200*u.mm
-        d_LYOT_scicam = 150*u.mm
-        d_scicam_image = 150*u.mm
 
         fl_oap0 = self.oaefl(293.6,27)*u.mm
         fl_oap1 = self.oaefl(254,40)*u.mm
         fl_oap2 = self.oaefl(346,55)*u.mm
         fl_oap3 = self.oaefl(914.4,100)*u.mm
-        
+
         fl_lens = 200*u.mm
         fl_scicam_lens = 150*u.mm
-        
+        fl_llowfsc_lens = 200*u.mm
+
         # define optics 
         one_inch = poppy.CircularAperture(radius=25.4*u.mm/2, name='1in Aperture', gray_pixel=False)
         
-        pupil_stop  = poppy.CircularAperture(radius=self.pupil_diam/2, name='Pupil Stop/FSM')
+        pupil_stop = poppy.CircularAperture(radius=self.pupil_diam/2, name='Pupil Stop/FSM')
         flat1 = poppy.CircularAperture(radius=12.7*u.mm/2, name='Flat 1')
         oap1 = poppy.QuadraticLens(fl_oap1, name='OAP1')
         oap2 = poppy.QuadraticLens(fl_oap2, name='OAP2')
@@ -315,63 +325,55 @@ class SCOOBM():
         # define FresnelOpticalSystem and add optics
         self.N = int(self.npix*self.oversample)
         fosys = poppy.FresnelOpticalSystem(pupil_diameter=self.pupil_diam, npix=self.npix, beam_ratio=1/self.oversample)
-        
         fosys.add_optic(pupil_stop)
+        fosys.add_optic(RETRIEVED)
         if self.use_opds: fosys.add_optic(self.flat1_opd)
         if self.use_pupil_grating:
             self.init_pupil_grating()
             fosys.add_optic(self.PUPIL_GRATING)
-        
-        fosys.add_optic(flat1, distance=d_pupil_stop_flat)
+        fosys.add_optic(flat1, distance=self.d_pupil_stop_flat)
         if self.use_opds: fosys.add_optic(self.flat2_opd)
-        
-        fosys.add_optic(oap1, distance=d_flat_oap1)
+        fosys.add_optic(oap1, distance=self.d_flat_oap1)
         if self.use_aps: fosys.add_optic(one_inch)
         if self.use_opds: fosys.add_optic(self.oap1_opd)
-        
-        fosys.add_optic(oap2, distance=d_oap1_oap2)
+        fosys.add_optic(oap2, distance=self.d_oap1_oap2)
         if self.use_aps: fosys.add_optic(one_inch)
         if self.use_opds: fosys.add_optic(self.oap2_opd)
-        
-        fosys.add_optic(self.DM, distance=d_oap2_DM)
+        fosys.add_optic(self.DM, distance=self.d_oap2_DM)
         if self.use_aps: fosys.add_optic(DM_aperture)
-        
-        fosys.add_optic(RETRIEVED)
-
-        fosys.add_optic(oap3, distance=d_DM_oap3)
+        fosys.add_optic(oap3, distance=self.d_DM_oap3)
         if self.use_aps: fosys.add_optic(one_inch)
         if self.use_opds: fosys.add_optic(self.oap3_opd)
-        
         if self.ZWFS is not None:
-            fosys.add_optic(self.ZWFS, distance=d_oap3_FPM)
-            
+            fosys.add_optic(self.ZWFS, distance=self.d_oap3_FPM)
             fl_zwfs_lens = 75*u.mm
             zwfs_lens = poppy.QuadraticLens(fl_zwfs_lens)
             fosys.add_optic(zwfs_lens, distance=fl_zwfs_lens)
-            
             self.zwfs_pixelscale = 5*u.um/u.pix
             self.nzwfs = 400
-            fosys.add_detector(pixelscale=self.zwfs_pixelscale.to(u.m/u.pix), fov_pixels=self.nzwfs, distance=fl_zwfs_lens)
-        
+            fosys.add_optic(poppy.Detector(pixelscale=self.psf_pixelscale, fov_pixels=self.nzwfs, interp_order=3, name='Focal Plane'),  
+                            distance=fl_zwfs_lens)
             return fosys
-        
-        fosys.add_optic(FPM, distance=d_oap3_FPM)
-        # fosys.add_optic(poppy.InverseTransmission(poppy.CircularAperture(radius=19*u.um/2)) )
-        
-        fosys.add_optic(flat2, distance=d_FPM_flat2)
+        fosys.add_optic(FPM, distance=self.d_oap3_FPM)
+        fosys.add_optic(flat2, distance=self.d_FPM_flat2)
         if self.use_aps: fosys.add_optic(one_inch)
-        
-        fosys.add_optic(lens, distance=d_flat2_lens)
+        fosys.add_optic(lens, distance=self.d_flat2_lens)
         if self.use_aps: fosys.add_optic(one_inch)
-        
-        fosys.add_optic(lyot_plane, distance=d_lens_LYOT)
+        fosys.add_optic(lyot_plane, distance=self.d_lens_LYOT)
         fosys.add_optic(LYOT)
-        
-        fosys.add_optic(scicam_lens, distance=d_LYOT_scicam)
+        if self.use_llowfsc:
+            llowfsc_lens = poppy.QuadraticLens(fl_llowfsc_lens, name='Lens')
+            fosys.add_optic(llowfsc_lens, distance=fl_llowfsc_lens)
+            fosys.add_optic(poppy.Detector(pixelscale=self.llowfsc_pixelscale, fov_pixels=self.nllowfsc, interp_order=3, name='LLOWFSC Detector'),
+                            distance=fl_llowfsc_lens + self.llowfsc_defocus)
+            return fosys
+        fosys.add_optic(scicam_lens, distance=self.d_LYOT_scicam)
         if self.use_aps: fosys.add_optic(one_inch)
-        
-        fosys.add_detector(pixelscale=self.psf_pixelscale.to(u.m/u.pix), fov_pixels=self.npsf, distance=d_scicam_image)
-        
+
+        # fosys.add_optic(oap4, distance=self.d_lyot_oap4)
+
+        # fosys.add_detector(pixelscale=self.psf_pixelscale.to(u.m/u.pix), fov_pixels=self.npsf, distance=self.d_scicam_image)
+        fosys.add_optic(poppy.Detector(pixelscale=self.psf_pixelscale, fov_pixels=self.npsf, interp_order=3, name='Focal Plane'), distance=self.d_scicam_image)
         return fosys
     
     def calc_wfs(self, quiet=False):
@@ -399,16 +401,12 @@ class SCOOBM():
         _, wfs = fosys.calc_psf(inwave=self.inwave, normalize=self.norm, return_intermediates=True)
         if not quiet: print(f'PSF calculated in {(time.time()-start):.3f}s')
         
-        # Rotate the detector image
-        if abs(self.det_rotation)>0:
-            rotated_wf = self.rotate_wf(wfs[-1])
-            wfs[-1] = rotated_wf
         # Normalize the detector image
-        wfs[-1].wavefront /= np.sqrt(self.imnorm)
+        wfs[-1].wavefront /= np.sqrt(self.Imax_ref)
         
         return wfs
     
-    def calc_psf(self, plot=False,): 
+    def calc_wf(self, plot=False,): 
         '''
         This propagates a beam from start to finish and returns the complex 
         wavefront.
@@ -437,15 +435,15 @@ class SCOOBM():
         _, wfs = fosys.calc_psf(inwave=self.inwave, normalize=self.norm, return_final=True, return_intermediates=False)
 
         wf = self.rotate_wf(wfs[-1]) if abs(self.det_rotation)>0 else wfs[-1]
-        # Normalize by the unocculted PSF peak, however, this is a wavefront
-        # and the peak is an intensity, so need to take the sqrt
-        psf = wf.wavefront/np.sqrt(self.Imax_ref)
+
+        imwf = wf.wavefront/np.sqrt(self.Imax_ref) # Normalize by the unocculted PSF peak
+
         if plot:
-            imshows.imshow2(xp.abs(psf), xp.angle(psf), lognorm1=True, pxscl=self.psf_pixelscale_lamD)
+            imshows.imshow2(xp.abs(imwf), xp.angle(imwf), lognorm1=True, pxscl=self.psf_pixelscale_lamD, cmap2='twilight')
         
-        return psf
+        return imwf
     
-    def snap(self, plot=False):
+    def snap(self, plot=False, vmin=None):
         '''
         Calculate the and return the PSF intensity.
 
@@ -461,27 +459,11 @@ class SCOOBM():
         im: `cupy.ndarray`
             PSF intensity on the focal plane.
         '''
-        fosys = self.init_fosys()
-        self.init_inwave()
-        
-        _, wfs = fosys.calc_psf(inwave=self.inwave, normalize=self.norm, return_intermediates=False, return_final=True)
-        
-        wf = self.rotate_wf(wfs[-1]) if abs(self.det_rotation)>0 else wfs[-1]
-        im = wf.intensity
-        
-        if self.Imax_ref is not None:
-            im *= 1/self.Imax_ref
-            
+        im = xp.abs(self.calc_wf(plot=False))**2
+
         if plot:
-            imshows.imshow1(im, lognorm=True, pxscl=self.psf_pixelscale_lamD)
+            imshows.imshow1(im, lognorm=True, pxscl=self.psf_pixelscale_lamD, vmin=vmin)
             
         return im
     
-    def rotate_wf(self, wave):
-        wavefront = wave.wavefront
-        wavefront_r = _scipy.ndimage.rotate(xp.real(wavefront), angle=-self.det_rotation, reshape=False, order=1)
-        wavefront_i = _scipy.ndimage.rotate(xp.imag(wavefront), angle=-self.det_rotation, reshape=False, order=1)
-        
-        wave.wavefront = (wavefront_r + 1j*wavefront_i)
-        return wave
     
