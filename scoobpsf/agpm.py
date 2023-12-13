@@ -54,8 +54,9 @@ class IdealAGPM(poppy.AnalyticOpticalElement):
 #             raise ValueError("AGPM get_phasor must be called with a Wavefront "
 #                              "to define the spacing")
 #         assert (wave.planetype != PlaneType.image)
-
+        # print(wave.pixelscale)
         y, x = self.get_coordinates(wave)
+        # print(x,y)
         phase = xp.arctan2(y, x)
 
         AGPM_phasor = xp.exp(1.j * self.lp * phase) * self.get_transmission(wave)
