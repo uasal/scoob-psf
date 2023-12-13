@@ -56,62 +56,208 @@ def ifft(arr):
 
 #     return mft_arr
 
-def mft(wavefront, nlamD, npix, forward=True, centering='ADJUSTABLE'):
-        '''
-        npix : int
-            Number of pixels per side of destination plane array (corresponds
-            to 'N_B' in Soummer et al. 2007 4.2). This will be the # of pixels in
-            the image plane for a forward transformation, in the pupil plane for an
-            inverse.
-        '''
+# def mft(wavefront, nlamD, npix, forward=True, centering='ADJUSTABLE'):
+#         '''
+#         npix : int
+#             Number of pixels per side of destination plane array (corresponds
+#             to 'N_B' in Soummer et al. 2007 4.2). This will be the # of pixels in
+#             the image plane for a forward transformation, in the pupil plane for an
+#             inverse.
+#         '''
         
-        # this code was duplicated from POPPY's MFT method
-        npupY, npupX = wavefront.shape
-        nlamDX, nlamDY = nlamD, nlamD
-        npixY, npixX = npix, npix
+#         # this code was duplicated from POPPY's MFT method
+#         npupY, npupX = wavefront.shape
+#         nlamDX, nlamDY = nlamD, nlamD
+#         npixY, npixX = npix, npix
         
-        if forward:
-            dU = nlamDX / float(npixX)
-            dV = nlamDY / float(npixY)
-            dX = 1.0 / float(npupX)
-            dY = 1.0 / float(npupY)
+#         if forward:
+#             dU = nlamDX / float(npixX)
+#             dV = nlamDY / float(npixY)
+#             dX = 1.0 / float(npupX)
+#             dY = 1.0 / float(npupY)
+#         else:
+#             dX = nlamDX / float(npupX)
+#             dY = nlamDY / float(npupY)
+#             dU = 1.0 / float(npixX)
+#             dV = 1.0 / float(npixY)
+        
+#         if centering=='ADJUSTABLE':
+#             offsetY, offsetX = 0.0, 0.0
+#             Xs = (xp.arange(npupX, dtype=float) - float(npupX) / 2.0 - offsetX + 0.5) * dX
+#             Ys = (xp.arange(npupY, dtype=float) - float(npupY) / 2.0 - offsetY + 0.5) * dY
+
+#             Us = (xp.arange(npixX, dtype=float) - float(npixX) / 2.0 - offsetX + 0.5) * dU
+#             Vs = (xp.arange(npixY, dtype=float) - float(npixY) / 2.0 - offsetY + 0.5) * dV
+#         elif centering=='FFTSTYLE':
+#             Xs = (xp.arange(npupX, dtype=float) - (npupX / 2)) * dX
+#             Ys = (xp.arange(npupY, dtype=float) - (npupY / 2)) * dY
+
+#             Us = (xp.arange(npixX, dtype=float) - npixX / 2) * dU
+#             Vs = (xp.arange(npixY, dtype=float) - npixY / 2) * dV
+        
+#         XU = xp.outer(Xs, Us)
+#         YV = xp.outer(Ys, Vs)
+        
+#         if forward:
+#             expXU = xp.exp(-2.0 * np.pi * -1j * XU)
+#             expYV = xp.exp(-2.0 * np.pi * -1j * YV).T
+#             t1 = xp.dot(expYV, wavefront)
+#             t2 = xp.dot(t1, expXU)
+#         else:
+#             expYV = xp.exp(-2.0 * np.pi * 1j * YV).T
+#             expXU = xp.exp(-2.0 * np.pi * 1j * XU)
+#             t1 = xp.dot(expYV, wavefront)
+#             t2 = xp.dot(t1, expXU)
+
+#         norm_coeff = np.sqrt((nlamDY * nlamDX) / (npupY * npupX * npixY * npixX))
+        
+#         return norm_coeff * t2
+
+def mft(plane, nlamD, npix, offset=None, inverse=False, centering='FFTSTYLE'):
+    """Perform a matrix discrete Fourier transform with selectable
+    output sampling and centering.
+
+    Where parameters can be supplied as either scalars or 2-tuples, the first
+    element of the 2-tuple is used for the Y dimension and the second for the
+    X dimension. This ordering matches that of numpy.ndarray.shape attributes
+    and that of Python indexing.
+
+    To achieve exact correspondence to the FFT set nlamD and npix to the size
+    of the input array in pixels and use 'FFTSTYLE' centering. (n.b. When
+    using `numpy.fft.fft2` you must `numpy.fft.fftshift` the input pupil both
+    before and after applying fft2 or else it will introduce a checkerboard
+    pattern in the signs of alternating pixels!)
+
+    Parameters
+    ----------
+    plane : 2D ndarray
+        2D array (either real or complex) representing the input image plane or
+        pupil plane to transform.
+    nlamD : float or 2-tuple of floats (nlamDY, nlamDX)
+        Size of desired output region in lambda / D units, assuming that the
+        pupil fills the input array (corresponds to 'm' in
+        Soummer et al. 2007 4.2). This is in units of the spatial frequency that
+        is just Nyquist sampled by the input array.) If given as a tuple,
+        interpreted as (nlamDY, nlamDX).
+    npix : int or 2-tuple of ints (npixY, npixX)
+        Number of pixels per side side of destination plane array (corresponds
+        to 'N_B' in Soummer et al. 2007 4.2). This will be the # of pixels in
+        the image plane for a forward transformation, in the pupil plane for an
+        inverse. If given as a tuple, interpreted as (npixY, npixX).
+    inverse : bool, optional
+        Is this a forward or inverse transformation? (Default is False,
+        implying a forward transformation.)
+    centering : {'FFTSTYLE', 'SYMMETRIC', 'ADJUSTABLE'}, optional
+        What type of centering convention should be used for this FFT?
+
+        * ADJUSTABLE (the default) For an output array with ODD size n,
+          the PSF center will be at the center of pixel (n-1)/2. For an output
+          array with EVEN size n, the PSF center will be in the corner between
+          pixel (n/2-1, n/2-1) and (n/2, n/2)
+        * FFTSTYLE puts the zero-order term in a single pixel.
+        * SYMMETRIC spreads the zero-order term evenly between the center
+          four pixels
+
+    offset : 2-tuple of floats (offsetY, offsetX)
+        For ADJUSTABLE-style transforms, an offset in pixels by which the PSF
+        will be displaced from the central pixel (or cross). Given as
+        (offsetY, offsetX).
+    """
+    npupY, npupX = plane.shape
+
+    try:
+        if np.isscalar(npix):
+            npixY, npixX = float(npix), float(npix)
         else:
-            dX = nlamDX / float(npupX)
-            dY = nlamDY / float(npupY)
-            dU = 1.0 / float(npixX)
-            dV = 1.0 / float(npixY)
-        
-        if centering=='ADJUSTABLE':
+            npixY, npixX = tuple(xp.asarray(npix, dtype=float))
+    except ValueError:
+        raise ValueError(
+            "'npix' must be supplied as a scalar (for square arrays) or as "
+            "a 2-tuple of ints (npixY, npixX)"
+        )
+
+    # make sure these are integer values
+    if npixX != int(npixX) or npixY != int(npixY):
+        raise TypeError("'npix' must be supplied as integer value(s)")
+
+    try:
+        if np.isscalar(nlamD):
+            nlamDY, nlamDX = float(nlamD), float(nlamD)
+        else:
+            nlamDY, nlamDX = tuple(xp.asarray(nlamD, dtype=float))
+    except ValueError:
+        raise ValueError(
+            "'nlamD' must be supplied as a scalar (for square arrays) or as"
+            " a 2-tuple of floats (nlamDY, nlamDX)"
+        )
+
+    centering = centering.upper()
+
+
+    # In the following: X and Y are coordinates in the input plane
+    #                   U and V are coordinates in the output plane
+
+    if inverse:
+        dX = nlamDX / float(npupX)
+        dY = nlamDY / float(npupY)
+        dU = 1.0 / float(npixX)
+        dV = 1.0 / float(npixY)
+    else:
+        dU = nlamDX / float(npixX)
+        dV = nlamDY / float(npixY)
+        dX = 1.0 / float(npupX)
+        dY = 1.0 / float(npupY)
+
+
+    if centering == 'FFTSTYLE':
+        Xs = (xp.arange(npupX, dtype=float) - (npupX / 2)) * dX
+        Ys = (xp.arange(npupY, dtype=float) - (npupY / 2)) * dY
+
+        Us = (xp.arange(npixX, dtype=float) - npixX / 2) * dU
+        Vs = (xp.arange(npixY, dtype=float) - npixY / 2) * dV
+    elif centering == 'ADJUSTABLE':
+        if offset is None:
             offsetY, offsetX = 0.0, 0.0
-            Xs = (xp.arange(npupX, dtype=float) - float(npupX) / 2.0 - offsetX + 0.5) * dX
-            Ys = (xp.arange(npupY, dtype=float) - float(npupY) / 2.0 - offsetY + 0.5) * dY
-
-            Us = (xp.arange(npixX, dtype=float) - float(npixX) / 2.0 - offsetX + 0.5) * dU
-            Vs = (xp.arange(npixY, dtype=float) - float(npixY) / 2.0 - offsetY + 0.5) * dV
-        elif centering=='FFTSTYLE':
-            Xs = (xp.arange(npupX, dtype=float) - (npupX / 2)) * dX
-            Ys = (xp.arange(npupY, dtype=float) - (npupY / 2)) * dY
-
-            Us = (xp.arange(npixX, dtype=float) - npixX / 2) * dU
-            Vs = (xp.arange(npixY, dtype=float) - npixY / 2) * dV
-        
-        XU = xp.outer(Xs, Us)
-        YV = xp.outer(Ys, Vs)
-        
-        if forward:
-            expXU = xp.exp(-2.0 * np.pi * -1j * XU)
-            expYV = xp.exp(-2.0 * np.pi * -1j * YV).T
-            t1 = xp.dot(expYV, wavefront)
-            t2 = xp.dot(t1, expXU)
         else:
-            expYV = xp.exp(-2.0 * np.pi * 1j * YV).T
-            expXU = xp.exp(-2.0 * np.pi * 1j * XU)
-            t1 = xp.dot(expYV, wavefront)
-            t2 = xp.dot(t1, expXU)
+            try:
+                offsetY, offsetX = tuple(xp.asarray(offset, dtype=float))
+            except ValueError:
+                raise ValueError(
+                    "'offset' must be supplied as a 2-tuple with "
+                    "(y_offset, x_offset) as floating point values"
+                )
+        Xs = (xp.arange(npupX, dtype=float) - float(npupX) / 2.0 - offsetX + 0.5) * dX
+        Ys = (xp.arange(npupY, dtype=float) - float(npupY) / 2.0 - offsetY + 0.5) * dY
 
-        norm_coeff = np.sqrt((nlamDY * nlamDX) / (npupY * npupX * npixY * npixX))
-        
-        return norm_coeff * t2
+        Us = (xp.arange(npixX, dtype=float) - float(npixX) / 2.0 - offsetX + 0.5) * dU
+        Vs = (xp.arange(npixY, dtype=float) - float(npixY) / 2.0 - offsetY + 0.5) * dV
+    elif centering == 'SYMMETRIC':
+        Xs = (xp.arange(npupX, dtype=float) - float(npupX) / 2.0 + 0.5) * dX
+        Ys = (xp.arange(npupY, dtype=float) - float(npupY) / 2.0 + 0.5) * dY
+
+        Us = (xp.arange(npixX, dtype=float) - float(npixX) / 2.0 + 0.5) * dU
+        Vs = (xp.arange(npixY, dtype=float) - float(npixY) / 2.0 + 0.5) * dV
+    else:
+        raise ValueError("Invalid centering style")
+
+    XU = xp.outer(Xs, Us)
+    YV = xp.outer(Ys, Vs)
+
+    # SIGN CONVENTION: plus signs in exponent for basic forward propagation, with
+    # phase increasing with time. This convention differs from prior poppy version < 1.0
+    if inverse:
+        expYV = xp.exp(-2.0 * np.pi * 1j * YV).T
+        expXU = xp.exp(-2.0 * np.pi * 1j * XU)
+        t1 = xp.dot(expYV, plane)
+        t2 = xp.dot(t1, expXU)
+    else:
+        expXU = xp.exp(-2.0 * np.pi * -1j * XU)
+        expYV = xp.exp(-2.0 * np.pi * -1j * YV).T
+        t1 = xp.dot(expYV, plane)
+        t2 = xp.dot(t1, expXU)
+
+    norm_coeff = np.sqrt((nlamDY * nlamDX) / (npupY * npupX * npixY * npixX))
+    return norm_coeff * t2
 
 class SCOOB():
 
@@ -225,7 +371,7 @@ class SCOOB():
         self.PUPIL = ppr < self.pupil_diam.to_value(u.m)/2
         
         self.focal_pixelscale_lamD = 1/self.oversample
-        x_fp = ( xp.linspace(-self.N/2, self.N/2-1, self.N) + 1/2 ) * self.focal_pixelscale_lamD
+        x_fp = ( xp.linspace(-self.N/2, self.N/2-1, self.N)) * self.focal_pixelscale_lamD
         fpx, fpy = xp.meshgrid(x_fp, x_fp)
         fpr = xp.sqrt(fpx**2 + fpy**2)
         fpth = xp.arctan2(fpy,fpx)
