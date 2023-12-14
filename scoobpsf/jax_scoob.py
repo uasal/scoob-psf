@@ -92,12 +92,15 @@ def lstsq(modes, data):
     return c
 
 
-def make_focal_grid(npix, oversample, polar=True):
+def make_focal_grid(npix, oversample, polar=True, center='pixel'):
     
     N = int(npix*oversample)
     pxscl = 1/oversample
     
-    xx = (jnp.linspace(0, N-1, N) - N/2 + 1/2)*pxscl
+    if center=='pixel':
+        xx = jnp.linspace(-N/2, N/2-1, N)*pxscl
+    elif center=='corner':
+        xx = (jnp.linspace(0, N-1, N) - N/2 + 1/2)*pxscl
     print(xx)
     x,y = jnp.meshgrid(xx,xx)
 
@@ -171,14 +174,14 @@ def make_pupil(pupil_diam, npix, oversample, ratio=1):
 # PROPAGATION FUNCTIONS
 
 def fft(arr):
-    ftarr = jnp.fft.fftshift(jnp.fft.fft2(jnp.fft.ifftshift(arr)))
+    ftarr = jnp.fft.ifftshift(jnp.fft.fft2(jnp.fft.fftshift(arr)))
     return ftarr
 
 def ifft(arr):
-    iftarr = jnp.fft.ifftshift(jnp.fft.ifft2(jnp.fft.fftshift(arr)))
+    iftarr = jnp.fft.fftshift(jnp.fft.ifft2(jnp.fft.ifftshift(arr)))
     return iftarr
 
-def mft(wavefront, nlamD, npix,):
+def mft_symmetric(wavefront, nlamD, npix,):
     # this code was duplicated from POPPY's MFT method
     npupY, npupX = wavefront.shape
     nlamDX, nlamDY = nlamD, nlamD
@@ -208,64 +211,38 @@ def mft(wavefront, nlamD, npix,):
 
     return norm_coeff * t2
 
-# def mft(wavefront, nlamD, npix, forward=True, centering='ADJUSTABLE'):
-#         '''
-#         npix : int
-#             Number of pixels per side side of destination plane array (corresponds
-#             to 'N_B' in Soummer et al. 2007 4.2). This will be the # of pixels in
-#             the image plane for a forward transformation, in the pupil plane for an
-#             inverse.
-#         '''
-        
-#         # this code was duplicated from POPPY's MFT method
-#         npupY, npupX = wavefront.shape
-#         nlamDX, nlamDY = nlamD, nlamD
-#         npixY, npixX = npix, npix
-        
-#         if forward:
-#             dU = nlamDX / float(npixX)
-#             dV = nlamDY / float(npixY)
-#             dX = 1.0 / float(npupX)
-#             dY = 1.0 / float(npupY)
-#         else:
-#             dX = nlamDX / float(npupX)
-#             dY = nlamDY / float(npupY)
-#             dU = 1.0 / float(npixX)
-#             dV = 1.0 / float(npixY)
-        
-#         if centering=='ADJUSTABLE':
-#             offsetY, offsetX = 0.0, 0.0
-#             Xs = (jnp.arange(npupX, dtype=float) - float(npupX) / 2.0 - offsetX + 0.5) * dX
-#             Ys = (jnp.arange(npupY, dtype=float) - float(npupY) / 2.0 - offsetY + 0.5) * dY
+def mft_fftstyle(plane, nlamD, npix):
+    npupY, npupX = plane.shape
+    nlamDX, nlamDY = nlamD, nlamD
+    npixY, npixX = npix, npix
 
-#             Us = (jnp.arange(npixX, dtype=float) - float(npixX) / 2.0 - offsetX + 0.5) * dU
-#             Vs = (jnp.arange(npixY, dtype=float) - float(npixY) / 2.0 - offsetY + 0.5) * dV
-#         elif centering=='FFTSTYLE':
-#             Xs = (jnp.arange(npupX, dtype=float) - (npupX / 2)) * dX
-#             Ys = (jnp.arange(npupY, dtype=float) - (npupY / 2)) * dY
+    # In the following: X and Y are coordinates in the input plane
+    #                   U and V are coordinates in the output plane
 
-#             Us = (jnp.arange(npixX, dtype=float) - npixX / 2) * dU
-#             Vs = (jnp.arange(npixY, dtype=float) - npixY / 2) * dV
-        
-#         XU = jnp.outer(Xs, Us)
-#         YV = jnp.outer(Ys, Vs)
-        
-#         if forward:
-#             expXU = jnp.exp(-2.0 * np.pi * -1j * XU)
-#             expYV = jnp.exp(-2.0 * np.pi * -1j * YV).T
-#             t1 = jnp.dot(expYV, wavefront)
-#             t2 = jnp.dot(t1, expXU)
-#         else:
-#             expYV = jnp.exp(-2.0 * np.pi * 1j * YV).T
-#             expXU = jnp.exp(-2.0 * np.pi * 1j * XU)
-#             t1 = jnp.dot(expYV, wavefront)
-#             t2 = jnp.dot(t1, expXU)
+    dU = nlamDX / float(npixX)
+    dV = nlamDY / float(npixY)
+    dX = 1.0 / float(npupX)
+    dY = 1.0 / float(npupY)
 
-#         norm_coeff = np.sqrt((nlamDY * nlamDX) / (npupY * npupX * npixY * npixX))
-        
-#         return norm_coeff * t2
-    
-    
+    Xs = (xp.arange(npupX, dtype=float) - (npupX / 2)) * dX
+    Ys = (xp.arange(npupY, dtype=float) - (npupY / 2)) * dY
+
+    Us = (xp.arange(npixX, dtype=float) - npixX / 2) * dU
+    Vs = (xp.arange(npixY, dtype=float) - npixY / 2) * dV
+
+    XU = xp.outer(Xs, Us)
+    YV = xp.outer(Ys, Vs)
+
+    # SIGN CONVENTION: plus signs in exponent for basic forward propagation, with
+    # phase increasing with time. This convention differs from prior poppy version < 1.0
+    expXU = xp.exp(-2.0 * np.pi * -1j * XU)
+    expYV = xp.exp(-2.0 * np.pi * -1j * YV).T
+    t1 = xp.dot(expYV, plane)
+    t2 = xp.dot(t1, expXU)
+
+    norm_coeff = np.sqrt((nlamDY * nlamDX) / (npupY * npupX * npixY * npixX))
+    return norm_coeff * t2
+
 # Forward Model
 
 def forward_model(wavefront, WFE, dm_phasor, FPM, LYOT, 
@@ -285,7 +262,7 @@ def forward_model(wavefront, WFE, dm_phasor, FPM, LYOT,
         
         # propagate to image plane with MFT
         nlamD = npsf * pixelscale_lamD * oversample
-        wavefront = mft(wavefront, nlamD, npsf)
+        wavefront = mft_fftstyle(wavefront, nlamD, npsf)
         
         wavefront /= jnp.sqrt(Imax_ref)
         

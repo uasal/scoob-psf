@@ -97,11 +97,6 @@ class SCOOBM():
         self.det_rotation = det_rotation
         self.Imax_ref = Imax_ref
         
-        self.use_synthetic_opds = use_synthetic_opds
-        self.use_measured_opds = use_measured_opds
-        self.use_opds = self.use_synthetic_opds or self.use_measured_opds
-        self.init_opds()
-        
         self.use_pupil_grating = use_pupil_grating
         self.use_aps = use_aps
         
@@ -142,8 +137,13 @@ class SCOOBM():
         self.oap2_diam = 25.4*u.mm
         self.oap3_diam = 25.4*u.mm
 
-        self.psd_index = 2.8
+        self.psd_index = 2.75
         self.opd_rms = 12*u.nm
+
+        self.use_synthetic_opds = use_synthetic_opds
+        self.use_measured_opds = use_measured_opds
+        self.use_opds = self.use_synthetic_opds or self.use_measured_opds
+        self.init_opds()
 
         # Load influence function
         self.inf_fun = str(module_path/'inf.fits') if inf_fun is None else inf_fun
@@ -255,7 +255,7 @@ class SCOOBM():
         elif self.use_synthetic_opds:
             s1, s2, s3, s4, s5, s6, s7 = (1,2,3,4,5,6,7)
             
-            self.m3_opd = poppy.StatisticalPSDWFE(index=self.psd_index, wfe=self.opd_rms, radius=self.m3_diam/2, seed=s1)
+            # self.m3_opd = poppy.StatisticalPSDWFE(index=self.psd_index, wfe=self.opd_rms, radius=self.m3_diam/2, seed=s1)
             self.flat1_opd = poppy.StatisticalPSDWFE(index=self.psd_index, wfe=self.opd_rms, radius=self.flat1_diam/2, seed=s2)
             self.flat2_opd = poppy.StatisticalPSDWFE(index=self.psd_index, wfe=self.opd_rms, radius=self.flat2_diam/2, seed=s3)
             self.oap1_opd = poppy.StatisticalPSDWFE(index=self.psd_index, wfe=self.opd_rms, radius=self.oap1_diam/2, seed=s4)
@@ -434,12 +434,12 @@ class SCOOBM():
         self.init_inwave()
         _, wfs = fosys.calc_psf(inwave=self.inwave, normalize=self.norm, return_final=True, return_intermediates=False)
 
-        wf = self.rotate_wf(wfs[-1]) if abs(self.det_rotation)>0 else wfs[-1]
+        wf = utils.rotate_arr(wfs[-1].wavefront, -self.det_rotation) if abs(self.det_rotation)>0 else wfs[-1].wavefront
 
-        imwf = wf.wavefront/np.sqrt(self.Imax_ref) # Normalize by the unocculted PSF peak
+        imwf = wf/np.sqrt(self.Imax_ref) # Normalize by the unocculted PSF peak
 
         if plot:
-            imshows.imshow2(xp.abs(imwf), xp.angle(imwf), lognorm1=True, pxscl=self.psf_pixelscale_lamD, cmap2='twilight')
+            imshows.imshow2(xp.abs(imwf)**2, xp.angle(imwf), lognorm1=True, pxscl=self.psf_pixelscale_lamD, cmap2='twilight')
         
         return imwf
     
