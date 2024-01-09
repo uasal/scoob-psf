@@ -475,7 +475,7 @@ class SCOOBM():
                  oversample=4,
                  use_llowfsc=False,
                  npsf=400, 
-                 psf_pixelscale=4.63e-6*u.m/u.pix,
+                 psf_pixelscale=3.76*u.um/u.pix,
                  psf_pixelscale_lamD=None,
                  Imax_ref=1,
                  det_rotation=0,
@@ -519,7 +519,7 @@ class SCOOBM():
         
         self.pupil_diam = pupil_diam
         self.wavelength_c = wavelength
-        
+
         if wavelength is None: 
             print('No wavelength provided on instantiation. '
                   f'Setting wavelength to {self.wavelength_c*1e9:0.1e} nm')
@@ -527,49 +527,6 @@ class SCOOBM():
         else: 
             self.wavelength = wavelength
         
-        self.npix = int(npix)
-        self.oversample = oversample
-        self.N = int(self.npix*self.oversample)
-        
-        self.as_per_lamD = ((self.wavelength_c/self.pupil_diam)*u.radian).to(u.arcsec)
-        self.source_offset = source_offset
-        
-        self.npsf = npsf
-        if psf_pixelscale_lamD is None: # overrides psf_pixelscale this way
-            self.psf_pixelscale = psf_pixelscale
-            self.psf_pixelscale_lamD = (1/(5)) * self.psf_pixelscale.to(u.m/u.pix).value/4.63e-6
-        else:
-            self.psf_pixelscale_lamD = psf_pixelscale_lamD
-            self.psf_pixelscale = 4.63e-6*u.m/u.pix * self.psf_pixelscale_lamD/(1/5)
-        self.norm = 'first' # This is the normalization that POPPY uses in propagating a wavefront
-        
-        self.det_rotation = det_rotation
-        self.Imax_ref = Imax_ref
-        
-        self.use_pupil_grating = use_pupil_grating
-        self.use_aps = use_aps
-        
-        self.RETRIEVED = poppy.ScalarTransmission(name='Phase Retrieval Place-holder') if RETRIEVED is None else RETRIEVED
-        self.FPM = poppy.ScalarTransmission(name='Focal Plane Mask Place-holder') if FPM is None else FPM
-        self.LYOT = poppy.ScalarTransmission(name='Lyot Stop Place-holder') if LYOT is None else LYOT
-        self.FIELDSTOP = poppy.ScalarTransmission(name='Field stop Place-holder') if FIELDSTOP is None else FIELDSTOP
-        
-        self.ZWFS = ZWFS
-        
-        self.use_llowfsc = use_llowfsc
-        self.llowfsc_pixelscale = 3.76*u.um/u.pix # Sony IMX571
-        self.nllowfsc = 64
-        self.llowfsc_defocus = 2.5*u.mm
-
-        self.distances = {
-            ### FIXME: we should implement the distances as a dictionary that gets loaded in by a toml file
-        }
-
-        self.diams = {
-            ### FIXME
-        }
-
-
         # focal lengths of powered optics 
         self.fl_oap1 = 254/2*u.mm
         self.fl_oap2 = 346/2*u.mm
@@ -601,9 +558,52 @@ class SCOOBM():
         self.oap2_diam = 25.4*u.mm
         self.oap3_diam = 25.4*u.mm
 
+        self.npix = int(npix)
+        self.oversample = oversample
+        self.N = int(self.npix*self.oversample)
+        
+        self.as_per_lamD = ((self.wavelength_c/self.pupil_diam)*u.radian).to(u.arcsec)
+        self.source_offset = source_offset
+        
+        self.npsf = npsf
+        self.um_per_lamD = (self.fl_oap7*self.wavelength_c/(9.26*u.mm)).to(u.um)
+        if psf_pixelscale_lamD is None: # overrides psf_pixelscale this way
+            self.psf_pixelscale = psf_pixelscale
+            self.psf_pixelscale_lamD =  self.psf_pixelscale.to_value(u.um/u.pix) / self.um_per_lamD.value
+        else:
+            self.psf_pixelscale_lamD = psf_pixelscale_lamD
+            self.psf_pixelscale = self.psf_pixelscale_lamD * self.um_per_lamD/u.pix
+        self.norm = 'first' # This is the normalization that POPPY uses in propagating a wavefront
+        
+        self.det_rotation = det_rotation
+        self.Imax_ref = Imax_ref
+        
+        self.use_pupil_grating = use_pupil_grating
+        self.use_aps = use_aps
+        
+        self.RETRIEVED = poppy.ScalarTransmission(name='Phase Retrieval Place-holder') if RETRIEVED is None else RETRIEVED
+        self.FPM = poppy.ScalarTransmission(name='Focal Plane Mask Place-holder') if FPM is None else FPM
+        self.LYOT = poppy.ScalarTransmission(name='Lyot Stop Place-holder') if LYOT is None else LYOT
+        self.FIELDSTOP = poppy.ScalarTransmission(name='Field stop Place-holder') if FIELDSTOP is None else FIELDSTOP
+        
+        self.ZWFS = ZWFS
+        
+        self.use_llowfsc = use_llowfsc
+        self.llowfsc_pixelscale = 3.76*u.um/u.pix # Sony IMX571
+        self.nllowfsc = 64
+        self.llowfsc_defocus = 2.5*u.mm
+        self.fl_llowfsc_lens = 200*u.mm
+
+        self.distances = {
+            ### FIXME: we should implement the distances as a dictionary that gets loaded in by a toml file
+        }
+
+        self.diams = {
+            ### FIXME
+        }
+
         self.psd_index = 2.75
         self.opd_rms = 12*u.nm
-
         self.use_synthetic_opds = use_synthetic_opds
         self.use_measured_opds = use_measured_opds
         self.use_opds = self.use_synthetic_opds or self.use_measured_opds

@@ -71,18 +71,16 @@ class SCOOBI():
                  dm_delay=0.01,
                 x_shift=0,
                 y_shift=0,
-                nims=1,
+                Nims=1,
                  npsf=256,
-                 normalize=False,
-                 texp_ref=None,
-                 max_ref=None,
+                 Imax_ref=None,
+                 exp_time_ref=None,
+                 att_ref=None,
                 ):
         
         # FIXME: make the science camera such that it can be specified
 
         # FIXME: add functionality to automatically subtract dark frames from newly captured frames
-
-        # FIXME: add functionality for fiber attenuator, include for normalization
 
         self.is_model = False
         
@@ -124,49 +122,70 @@ class SCOOBI():
         self.npsf = 64
         self.psf_pixelscale = 4.63e-6*u.m/u.pix
         self.psf_pixelscale_lamD = (1/5) * self.psf_pixelscale.to(u.m/u.pix).value/4.63e-6
-        self.nims = nims
+        self.Nims = Nims
         
         client.wait_for_properties({'scicam.exptime'}, timeout=10)
-        self._texp = client['scicam.exptime.current']
+        self._exp_time = client['scicam.exptime.current']
         
-        self.texp_ref = texp_ref
-        self.max_ref = max_ref
+        self.exp_time_ref = exp_time_ref
+        self.Imax_ref = Imax_ref
         
         self.npsf = npsf
-        
+        self.nbits = 16
+
         self.normalize = normalize
-        if self.texp_ref is not None and self.max_ref is not None:
+        if self.texp_ref is not None and self.Imax_ref is not None:
             self.imnorm = self.max0 / self.texp0
         
         self.x_shift = x_shift
         self.y_shift = y_shift
 
         self.use_cupy = False
+
+        self.subtract_bias = False
+        self.bias = 5
     
+
     
     @property
     def texp(self):
-        return self._texp
+        return self._exp_time
 
     @texp.setter
     def texp(self, value):
         client.wait_for_properties({'scicam.exptime'}, timeout=10)
         client['scicam.exptime.target'] = value
         time.sleep(0.5)
-        self._texp = client['scicam.exptime.current']
+        self._exp_time = client['scicam.exptime.current']
         
     @property
-    def emgain(self):
-        return self._emgain
+    def gain(self):
+        return self._gain
 
-    @emgain.setter
-    def emgain(self, value):
+    @gain.setter
+    def gain(self, value):
         client.wait_for_properties({'scicam.emgain'}, timeout=10)
         client['scicam.emgain.target'] = value
         time.sleep(0.5)
-        self._emgain = client['scicam.emgain.current']
+        self._gain = client['scicam.emgain.current']
     # make something for emgain, client['scicam.emgain.target'] = 20
+
+    '''
+    FIXME: need to implement control of the fiber attenuator
+
+    @property
+    def attenuation(self):
+        return self._attenuation
     
+    @attenuation.setter
+    def attenuation(self, value):
+        client.wait_for_properties({''}, timeout=10)
+        client[''] = value
+        time.sleep(0.5)
+        self._gain = client['']
+
+    '''
+
     def zero_dm(self):
         self.dmc.write(np.zeros(self.dm_shape))
         time.sleep(self.dm_delay)
@@ -218,6 +237,71 @@ class SCOOBI():
             imshows.imshow1(im, lognorm=True, pxscl=self.psf_pixelscale_lamD, grid=True, vmin=vmin)
         
         return im
+    
+    def snap_many(self, quiet=True, plot=False, sat_thresh=100):
+        if self.EMCCD is None:
+            raise ValueError('ERROR: must have EMCCD object to use this functionality.')
+        if self.exp_times_list is None:
+            raise ValueError('ERROR: must specify a list of exposure times to stack frames with variable exposures.')
+
+        # ims = []
+        # im_masks = []
+        total_flux = 0.0
+        pixel_weights = 0.0
+        for i in range(len(self.exp_times_list)):
+            self.exp_time = copy.copy(self.exp_times_list[i])
+            if self.Nframes_list is not None:
+                self.Nims = self.Nframes_list[i]
+
+            averaged_frame = 0.0
+            for j in range(self.Nims):
+                frame = self.cam.grab_latest()
+                if plot: imshows.imshow1(frame, f'Individual frame with\nexposure time {self.exp_time:.3f}', lognorm=True)
+                averaged_frame += frame
+            averaged_frame = xp.array(averaged_frame)/self.Nims
+            pixel_sat_mask = averaged_frame>2**self.nbits - sat_thresh
+            if self.subtract_bias:
+                averaged_frame -= self.bias
+
+            if plot:
+                print('Obtaining averaged frame.')
+                imshows.imshow2(averaged_frame, pixel_sat_mask, 
+                                f'Averaged Frame:\nExposure Time = {self.exp_times_list[i]}s\nN-frames = {self.Nims:d}',
+                                'Pixel Saturation Mask', 
+                                lognorm1=True)
+            # ims.append(copy.copy(averaged_frame))
+            # im_masks.append(copy.copy(pixel_sat_mask))
+
+            flux_frame = copy.copy(averaged_frame)/self.exp_times_list
+            flux_frame[pixel_sat_mask] = 0
+            pixel_weights += ~pixel_sat_mask
+            total_flux += flux_frame
+
+        # total_flux = 0.0
+        # pixel_weights = 0.0
+        # for i in range(len(self.exp_times_list)):
+        #     flux_im = copy.copy(ims[i])
+        #     flux_im[im_masks[i]] = 0
+        #     pixel_weights += ~im_masks[i]
+        #     flux_im /= self.exp_times_list[i]
+
+        #     if plot: 
+        #         imshows.imshow2(flux_im, pixel_weights, 
+        #                         f'Masked Flux Image: \nExposure time: {self.exp_times_list[i]:.2e}s', 
+        #                         lognorm1=True)
+        #     total_flux += flux_im
+            
+        total_flux_frame = total_flux/pixel_weights
+
+        total_flux_frame = _scipy.ndimage.shift(total_flux_frame, (self.y_shift, self.x_shift), order=0)
+        total_flux_frame = pad_or_crop(total_flux_frame, self.npsf)
+
+        if self.Imax_ref is not None and self.em_gain_ref is not None: # normalize by EM gain
+            self.norm_factor = 1/self.Imax_ref * self.gain_ref/self.gain
+        else:
+            self.norm_factor = 1
+
+        return total_flux_frame*self.norm_factor
     
     
         
