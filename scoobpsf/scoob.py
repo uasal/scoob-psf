@@ -474,6 +474,7 @@ class SCOOBM():
                  npix=256, 
                  oversample=4,
                  use_llowfsc=False,
+                 lyot_diam=9.26*u.mm, 
                  npsf=400, 
                  psf_pixelscale=3.76*u.um/u.pix,
                  psf_pixelscale_lamD=None,
@@ -566,7 +567,8 @@ class SCOOBM():
         self.source_offset = source_offset
         
         self.npsf = npsf
-        self.um_per_lamD = (self.fl_oap7*self.wavelength_c/(9.26*u.mm)).to(u.um)
+        self.lyot_diam = lyot_diam
+        self.um_per_lamD = (self.fl_oap7*self.wavelength_c/(lyot_diam)).to(u.um)
         if psf_pixelscale_lamD is None: # overrides psf_pixelscale this way
             self.psf_pixelscale = psf_pixelscale
             self.psf_pixelscale_lamD =  self.psf_pixelscale.to_value(u.um/u.pix) / self.um_per_lamD.value
