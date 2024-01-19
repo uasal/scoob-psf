@@ -264,6 +264,7 @@ class SCOOB():
     def __init__(self, 
                  wavelength=None, 
                  pupil_diam=6.75*u.mm,
+                 lyot_factor=0.9,
                  dm_fill_factor=0.95,
                  npix=256, 
                  oversample=4,
@@ -288,6 +289,8 @@ class SCOOB():
             self.wavelength = wavelength
         
         self.pupil_diam = pupil_diam.to(u.m)
+        self.lyot_factor = lyot_factor
+        self.lyot_diam = self.lyot_factor * self.pupil_diam
         
         self.npix = npix
         self.oversample = oversample
@@ -369,6 +372,7 @@ class SCOOB():
         self.pupil_grid = xp.array([ppr, ppth])
         
         self.PUPIL = ppr < self.pupil_diam.to_value(u.m)/2
+        self.LYOT = ppr < self.lyot_diam.to_value(u.m)/2
         
         self.focal_pixelscale_lamD = 1/self.oversample
         x_fp = ( xp.linspace(-self.N/2, self.N/2-1, self.N)) * self.focal_pixelscale_lamD

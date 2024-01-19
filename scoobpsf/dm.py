@@ -57,17 +57,6 @@ def make_gaussian_inf_fun(act_spacing=300e-6*u.m, sampling=25, coupling=0.15,
 
     return xp.array(inf), sampling
 
-# def _init_dm_class_dummy(self,args):
-
-#     # DM setup
-#     self.shithead = 'me_irl'
-
-# class DM():
-
-#     _init_dm_class_dummy()
-
-# class PoppyDM(poppy.AnalyticOpticalElement)
-
 class DeformableMirror(poppy.AnalyticOpticalElement):
     
     
@@ -81,6 +70,7 @@ class DeformableMirror(poppy.AnalyticOpticalElement):
                  inf_fun=None,
                  inf_cube=None,
                  inf_sampling=None,
+                 name='DM',
                 ):
         
         self.Nact = Nact
@@ -118,11 +108,14 @@ class DeformableMirror(poppy.AnalyticOpticalElement):
         self.inf_pixelscale = self.act_spacing/(self.inf_sampling*u.pix)
 
         self.include_reflection = include_reflection
-        print('Using reflection when computing OPD.')
+        if self.include_reflection:
+            print('Including factor of 2 from reflection when computing OPD.')
+        else:
+            print('Not including factor of 2 from reflection when computing OPD.')
 
         self.aperture = aperture
         self.planetype = poppy.poppy_core.PlaneType.intermediate
-        self.name = 'DM'
+        self.name = name
         
     @property
     def command(self):
@@ -168,7 +161,7 @@ class DeformableMirror(poppy.AnalyticOpticalElement):
                 inf_fun = interp_arr(self.inf_fun, self.inf_pixelscale.to_value(u.m/u.pix), pixelscale.to_value(u.m/u.pix), order=3)
                 # inf_fun = interp_arr(self.inf_fun, scale)
 
-            xc = inf_sampling*(xp.linspace(-self.Nact//2, self.Nact//2-1, self.Nact) + 1/2)
+            xc = inf_sampling*(xp.linspace(-self.Nact//2, self.Nact//2-1, self.Nact)+1/2)
             yc = inf_sampling*(xp.linspace(-self.Nact//2, self.Nact//2-1, self.Nact) + 1/2)
 
             oversample = 2
@@ -228,7 +221,8 @@ class DeformableMirror(poppy.AnalyticOpticalElement):
 
         assert (wave.planetype != poppy.poppy_core.PlaneType.image)
 
-        dm_phasor = self.get_transmission(wave) * xp.exp(1j * 2*np.pi/wave.wavelength.to_value(u.m) * self.get_opd(wave))
+        # dm_phasor = self.get_transmission(wave) * xp.exp(1j * 2*np.pi/wave.wavelength.to_value(u.m) * self.get_opd(wave))
+        dm_phasor = xp.exp(1j * 2*np.pi/wave.wavelength.to_value(u.m) * self.get_opd(wave))
 
         return dm_phasor
         
