@@ -23,20 +23,20 @@ except ImportError:
     print('Could not import scoobpy. Testbed interface unavailable.')
     scoobpy_avail = False
 
-def set_texp(texp):
-        client.wait_for_properties({'scicam.exptime'}, timeout=10)
-        client['scicam.exptime.target'] = texp
+def set_texp(texp, cam='nsvcam'):
+        client.wait_for_properties({cam + '.exptime'}, timeout=10)
+        client[cam + '.exptime.target'] = texp
         time.sleep(0.5)
 
-def set_roi(xc, yc, npix):
+def set_roi(xc, yc, npix, cam='nsvcam'):
     # update roi parameters
-    client.wait_for_properties(['scicam.roi_region_x', 'scicam.roi_region_y', 'scicam.roi_region_h' ,'scicam.roi_region_w', 'scicam.roi_set'])
-    client['scicam.roi_region_x.target'] = xc
-    client['scicam.roi_region_y.target'] = yc
-    client['scicam.roi_region_h.target'] = npix
-    client['scicam.roi_region_w.target'] = npix
+    client.wait_for_properties([cam + '.roi_region_x', cam + '.roi_region_y', cam + '.roi_region_h' ,cam + '.roi_region_w', cam + '.roi_set'])
+    client[cam + '.roi_region_x.target'] = xc
+    client[cam + '.roi_region_y.target'] = yc
+    client[cam + '.roi_region_h.target'] = npix
+    client[cam + '.roi_region_w.target'] = npix
     time.sleep(1)
-    client['scicam.roi_set.request'] = SwitchState.ON
+    client[cam + '.roi_set.request'] = SwitchState.ON
     time.sleep(1)
 
 
@@ -48,6 +48,7 @@ class SCOOBI():
                 x_shift=0,
                 y_shift=0,
                 nims=1,
+                cam='nsvcam'
                 normalization=1):
         
         self.is_model = False
@@ -89,8 +90,8 @@ class SCOOBI():
         self.psf_pixelscale_lamD = (1/5) * self.psf_pixelscale.to(u.m/u.pix).value/4.63e-6
         self.nims = nims
 
-        client.wait_for_properties({'scicam.exptime'}, timeout=10)
-        self.texp = client['scicam.exptime.current']
+        client.wait_for_properties({cam + '.exptime'}, timeout=10)
+        self.texp = client[cam + '.exptime.current']
         self.normalization = 1
 
         self.x_shift = x_shift
