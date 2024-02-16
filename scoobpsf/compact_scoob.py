@@ -41,78 +41,6 @@ def ifft(arr):
     iftarr = xp.fft.ifftshift(xp.fft.ifft2(xp.fft.fftshift(arr)))
     return iftarr
 
-# def mft(arr, npix, nmft, sampling):
-#     NA = arr.shape[0]
-#     NB = nmft
-
-#     u = xp.linspace(-1,1,NA)
-
-#     lim = ((nmft)/2) * sampling
-#     k = xp.linspace(-lim,lim,nmft)
-
-#     M = xp.exp(-1j*2*np.pi*xp.outer(u,k))
-#     print(M.shape, arr.shape, M.shape,)
-#     mft_arr = M.T @ arr @ M
-
-#     return mft_arr
-
-# def mft(wavefront, nlamD, npix, forward=True, centering='ADJUSTABLE'):
-#         '''
-#         npix : int
-#             Number of pixels per side of destination plane array (corresponds
-#             to 'N_B' in Soummer et al. 2007 4.2). This will be the # of pixels in
-#             the image plane for a forward transformation, in the pupil plane for an
-#             inverse.
-#         '''
-        
-#         # this code was duplicated from POPPY's MFT method
-#         npupY, npupX = wavefront.shape
-#         nlamDX, nlamDY = nlamD, nlamD
-#         npixY, npixX = npix, npix
-        
-#         if forward:
-#             dU = nlamDX / float(npixX)
-#             dV = nlamDY / float(npixY)
-#             dX = 1.0 / float(npupX)
-#             dY = 1.0 / float(npupY)
-#         else:
-#             dX = nlamDX / float(npupX)
-#             dY = nlamDY / float(npupY)
-#             dU = 1.0 / float(npixX)
-#             dV = 1.0 / float(npixY)
-        
-#         if centering=='ADJUSTABLE':
-#             offsetY, offsetX = 0.0, 0.0
-#             Xs = (xp.arange(npupX, dtype=float) - float(npupX) / 2.0 - offsetX + 0.5) * dX
-#             Ys = (xp.arange(npupY, dtype=float) - float(npupY) / 2.0 - offsetY + 0.5) * dY
-
-#             Us = (xp.arange(npixX, dtype=float) - float(npixX) / 2.0 - offsetX + 0.5) * dU
-#             Vs = (xp.arange(npixY, dtype=float) - float(npixY) / 2.0 - offsetY + 0.5) * dV
-#         elif centering=='FFTSTYLE':
-#             Xs = (xp.arange(npupX, dtype=float) - (npupX / 2)) * dX
-#             Ys = (xp.arange(npupY, dtype=float) - (npupY / 2)) * dY
-
-#             Us = (xp.arange(npixX, dtype=float) - npixX / 2) * dU
-#             Vs = (xp.arange(npixY, dtype=float) - npixY / 2) * dV
-        
-#         XU = xp.outer(Xs, Us)
-#         YV = xp.outer(Ys, Vs)
-        
-#         if forward:
-#             expXU = xp.exp(-2.0 * np.pi * -1j * XU)
-#             expYV = xp.exp(-2.0 * np.pi * -1j * YV).T
-#             t1 = xp.dot(expYV, wavefront)
-#             t2 = xp.dot(t1, expXU)
-#         else:
-#             expYV = xp.exp(-2.0 * np.pi * 1j * YV).T
-#             expXU = xp.exp(-2.0 * np.pi * 1j * XU)
-#             t1 = xp.dot(expYV, wavefront)
-#             t2 = xp.dot(t1, expXU)
-
-#         norm_coeff = np.sqrt((nlamDY * nlamDX) / (npupY * npupX * npixY * npixX))
-        
-#         return norm_coeff * t2
-
 def mft(plane, nlamD, npix, offset=None, inverse=False, centering='FFTSTYLE'):
     """Perform a matrix discrete Fourier transform with selectable
     output sampling and centering.
@@ -513,7 +441,7 @@ class SCOOB():
         else:
             return self.wavefront
     
-    def calc_psf(self):
+    def calc_wf(self):
         fpwf = self.propagate(return_all=False)
         return fpwf
     
