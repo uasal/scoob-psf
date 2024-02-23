@@ -191,9 +191,6 @@ class SCOOB():
 
     def __init__(self, 
                  wavelength=None, 
-                 pupil_diam=6.75*u.mm,
-                 lyot_factor=0.9,
-                 dm_fill_factor=0.95,
                  npix=256, 
                  oversample=4,
                  npsf=128,
@@ -201,9 +198,6 @@ class SCOOB():
                  detector_rotation=0, 
                  dm_ref=np.zeros((34,34)),
                  bad_acts=None,
-                 inf_fun=None, # defaults to inf.fits
-                 inf_sampling=None,
-                 inf_cube=None,
                  Imax_ref=None,
                  WFE=None,
                  FPM=None,
@@ -216,9 +210,21 @@ class SCOOB():
         else: 
             self.wavelength = wavelength
         
-        self.pupil_diam = pupil_diam.to(u.m)
-        self.lyot_factor = lyot_factor
-        self.lyot_diam = self.lyot_factor * self.pupil_diam
+        self.pupil_diam = 6.75*u.mm
+
+        self.bad_acts = bad_acts
+        self.init_dm()
+        self.dm_ref = dm_ref
+        self.set_dm(dm_ref)
+
+        self.dm_diam = 10.2*u.mm
+        self.dm_pupil_diam = 9.6*u.mm
+        self.dm_fill_factor = (self.dm_pupil_diam/self.dm_diam).decompose().value
+
+        self.lyot_stop_diam = 8.7*u.mm
+        self.lyot_pupil_diam = 9.6*u.mm
+
+        self.lyot_stop_ratio = (self.lyot_stop_diam/self.lyot_pupil_diam).decompose().value
         
         self.npix = npix
         self.oversample = oversample
@@ -234,14 +240,8 @@ class SCOOB():
         self.FPM = FPM
         self.LYOT = LYOT
         self.FIELDSTOP = FIELDSTOP
-
-        self.dm_fill_factor = dm_fill_factor # ratio for representing the illuminated area of the DM to accurately compute DM surface
+        
         self.reverse_parity = True
-
-        self.bad_acts = bad_acts
-        self.init_dm()
-        self.dm_ref = dm_ref
-        self.set_dm(dm_ref)
 
         self.init_grids()
         
@@ -289,35 +289,6 @@ class SCOOB():
         dm_surf = self.DM.get_surface(pixelscale=dm_pixelscale)
         return dm_surf
     
-    def init_grids(self):
-        self.pupil_pixelscale = self.pupil_diam.to_value(u.m) / self.npix
-        
-        x_pp = ( xp.linspace(-self.N/2, self.N/2-1, self.N) + 1/2 ) * self.pupil_pixelscale
-        ppx, ppy = xp.meshgrid(x_pp, x_pp)
-        ppr = xp.sqrt(ppx**2 + ppy**2)
-        ppth = xp.arctan2(ppy,ppx)
-        
-        self.pupil_grid = xp.array([ppr, ppth])
-        
-        self.PUPIL = ppr < self.pupil_diam.to_value(u.m)/2
-        self.LYOT = ppr < self.lyot_diam.to_value(u.m)/2
-        
-        self.focal_pixelscale_lamD = 1/self.oversample
-        x_fp = ( xp.linspace(-self.N/2, self.N/2-1, self.N)) * self.focal_pixelscale_lamD
-        fpx, fpy = xp.meshgrid(x_fp, x_fp)
-        fpr = xp.sqrt(fpx**2 + fpy**2)
-        fpth = xp.arctan2(fpy,fpx)
-        
-        self.focal_grid_pol = xp.array([fpr, fpth])
-        
-        x_im = ( xp.linspace(-self.npsf/2, self.npsf/2-1, self.npsf) + 1/2 ) * self.psf_pixelscale_lamD
-        imx, imy = xp.meshgrid(x_im, x_im)
-        imr = xp.sqrt(imx**2 + imy**2)
-        imth = xp.arctan2(imy,imx)
-        
-        self.im_grid_car = xp.array([imx, imy])
-        self.im_grid_pol = xp.array([imr, imth])
-    
     def apply_dm(self, wavefront, include_reflection=True):
         dm_surf = self.get_dm_surface()
         if include_reflection:
@@ -326,6 +297,32 @@ class SCOOB():
         wavefront *= xp.exp(1j*2*np.pi/self.wavelength.to_value(u.m) * dm_surf)
         return wavefront
     
+
+    def init_grids(self):
+        self.pupil_pixelscale = self.pupil_diam.to_value(u.m) / self.npix
+        
+        x_pp = ( xp.linspace(-self.N/2, self.N/2-1, self.N) + 1/2 ) * self.pupil_pixelscale
+        ppx, ppy = xp.meshgrid(x_pp, x_pp)
+        ppr = xp.sqrt(ppx**2 + ppy**2)
+        ppth = xp.arctan2(ppy,ppx)
+        
+        self.pupil_grid_polar = xp.array([ppr, ppth])
+        
+        self.focal_pixelscale_lamD = 1/self.oversample
+        x_fp = ( xp.linspace(-self.N/2, self.N/2-1, self.N)) * self.focal_pixelscale_lamD
+        fpx, fpy = xp.meshgrid(x_fp, x_fp)
+        fpr = xp.sqrt(fpx**2 + fpy**2)
+        fpth = xp.arctan2(fpy,fpx)
+        
+        self.focal_grid_polar = xp.array([fpr, fpth])
+        
+        x_im = ( xp.linspace(-self.npsf/2, self.npsf/2-1, self.npsf) + 1/2 ) * self.psf_pixelscale_lamD
+        imx, imy = xp.meshgrid(x_im, x_im)
+        imr = xp.sqrt(imx**2 + imy**2)
+        imth = xp.arctan2(imy,imx)
+        
+        self.im_grid_cart = xp.array([imx, imy])
+        self.im_grid_polar = xp.array([imr, imth])
     
     def apply_vortex(self, pupil_wavefront, Nprops=4, window_size=32):
 
@@ -369,8 +366,6 @@ class SCOOB():
                 mft(pupil_wavefront, nlamD, nmft, forward=True, centering='ADJUSTABLE')
 
                 # apply the windowed vortex
-
-
 
                 # take the inverse MFT to go back to the pupil plane
 
