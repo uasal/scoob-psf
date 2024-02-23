@@ -15,7 +15,6 @@ module_path = Path(os.path.dirname(os.path.abspath(scoobpsf.__file__)))
 
 import poppy
 
-
 try:
     import scoobpy
     from scoobpy import utils
@@ -29,11 +28,6 @@ try:
 except ImportError:
     print('Could not import scoobpy. Testbed interface unavailable.')
     scoobpy_avail = False
-
-def set_texp(texp): # this one can also be done from the class, recommended to do that way so class attribute updates
-        client.wait_for_properties({'scicam.exptime'}, timeout=10)
-        client['scicam.exptime.target'] = texp
-        time.sleep(0.5)
 
 def set_roi(xc, yc, npix):
     # update roi parameters
@@ -67,6 +61,7 @@ class SCOOBI():
 
     def __init__(self, 
                 dm_channel,
+                camera,
                 dm_ref=np.zeros((34,34)),
                  dm_delay=0.01,
                 x_shift=0,
@@ -86,6 +81,8 @@ class SCOOBI():
         
         self.wavelength_c = 633e-9*u.m
         
+        self.camera = camera
+
         # Init all DM settings
         self.Nact = 34
         self.Nacts = 952
@@ -94,11 +91,10 @@ class SCOOBI():
         self.dm_active_diam = 10.2*u.mm
         self.dm_full_diam = 11.1*u.mm
         self.full_stroke = 1.5e-6*u.m
-        
-        self.delay = 0.5
-        self.dmctot = utils.connect_to_dmshmim(channel='dm00disp') # the total shared memory image
+
         self.dm_channel = dm_channel
         self.dmc = utils.connect_to_dmshmim(channel=dm_channel) # channel used for writing to DM
+        self.dmctot = utils.connect_to_dmshmim(channel='dm00disp') # the total shared memory image
         
         self.dm_ref = dm_ref
         self.dm_delay = dm_delay
@@ -124,7 +120,7 @@ class SCOOBI():
         self.psf_pixelscale_lamD = (1/5) * self.psf_pixelscale.to(u.m/u.pix).value/4.63e-6
         self.Nims = Nims
         
-        client.wait_for_properties({'scicam.exptime'}, timeout=10)
+        client.wait_for_properties({'exptime'}, timeout=10)
         self._exp_time = client['scicam.exptime.current']
         
         self.exp_time_ref = exp_time_ref
@@ -145,18 +141,16 @@ class SCOOBI():
         self.subtract_bias = False
         self.bias = 5
     
-
-    
     @property
     def texp(self):
         return self._exp_time
 
     @texp.setter
     def texp(self, value):
-        client.wait_for_properties({'scicam.exptime'}, timeout=10)
-        client['scicam.exptime.target'] = value
+        client.wait_for_properties({self.camera+'.exptime'}, timeout=10)
+        client[self.camera+'.exptime.target'] = value
         time.sleep(0.5)
-        self._exp_time = client['scicam.exptime.current']
+        self._exp_time = client[self.camera+'.exptime.current']
         
     @property
     def gain(self):
@@ -170,21 +164,18 @@ class SCOOBI():
         self._gain = client['scicam.emgain.current']
     # make something for emgain, client['scicam.emgain.target'] = 20
 
-    '''
-    FIXME: need to implement control of the fiber attenuator
-
+    # FIXME: need to implement control of the fiber attenuator
     @property
     def attenuation(self):
         return self._attenuation
     
     @attenuation.setter
     def attenuation(self, value):
-        client.wait_for_properties({''}, timeout=10)
-        client[''] = value
+        client.wait_for_properties({'fiberatten.target'}, timeout=10)
+        client['fiberatten.target'] = value
         time.sleep(0.5)
-        self._gain = client['']
-
-    '''
+        # self._attenuation = client['fiberatten.current']
+        self._attenuation = value
 
     def zero_dm(self):
         self.dmc.write(np.zeros(self.dm_shape))
