@@ -11,25 +11,41 @@ from .math_module import xp, _scipy, ensure_np_array
 from . import imshows
 from .utils import pad_or_crop
 import scoobpsf
+
 module_path = Path(os.path.dirname(os.path.abspath(scoobpsf.__file__)))
 
 import poppy
 
 try:
     import scoobpy
-    from scoobpy import utils
+    from scoobpy import utils as scoob_utils
+    from magpyx.utils import ImageStream
+
+    import purepyindi
+    from purepyindi import INDIClient
+    client0 = INDIClient('localhost', 7624)
+    client0.start()
+
+    import purepyindi2
+    from purepyindi2 import IndiClient
+    client = IndiClient()
+    client.connect()
+    client.get_properties()
+
     scoobpy_avail = True
-    print('this worked')
-    
-    from purepyindi import INDIClient, SwitchState
-    client = INDIClient('localhost', 7624)
-    client.start()
     print('Succesfully initialized testbed interface.')
 except ImportError:
     print('Could not import scoobpy. Testbed interface unavailable.')
     scoobpy_avail = False
 
-def set_roi(xc, yc, npix):
+def move_psf(x_pos, y_pos):
+        client0.wait_for_properties(['stagepiezo.stagepupil_x_pos', 'stagepiezo.stagepupil_y_pos'])
+        scoob_utils.move_relative(client0, 'stagepiezo.stagepupil_x_pos', x_pos)
+        time.sleep(0.25)
+        scoob_utils.move_relative(client0, 'stagepiezo.stagepupil_y_pos', y_pos)
+        time.sleep(0.25)
+
+def set_zwo_roi(xc, yc, npix):
     # update roi parameters
     client.wait_for_properties(['scicam.roi_region_x', 'scicam.roi_region_y', 'scicam.roi_region_h' ,'scicam.roi_region_w', 'scicam.roi_set'])
     client['scicam.roi_region_x.target'] = xc
@@ -37,15 +53,8 @@ def set_roi(xc, yc, npix):
     client['scicam.roi_region_h.target'] = npix
     client['scicam.roi_region_w.target'] = npix
     time.sleep(1)
-    client['scicam.roi_set.request'] = SwitchState.ON
+    client['scicam.roi_set.request'] = purepyindi.SwitchState.ON
     time.sleep(1)
-
-def move_psf(x_pos, y_pos):
-    client.wait_for_properties(['stagepiezo.stagepupil_x_pos', 'stagepiezo.stagepupil_y_pos'])
-    utils.move_relative(client, 'stagepiezo.stagepupil_x_pos', x_pos)
-    time.sleep(0.25)
-    utils.move_relative(client, 'stagepiezo.stagepupil_y_pos', y_pos)
-    time.sleep(0.25)
     
 def move_pol(rel_pos): # this will change the throughput by rotating the polarizer
     # FIXME
@@ -60,17 +69,19 @@ def move_fold(pos):
 class SCOOBI():
 
     def __init__(self, 
-                dm_channel,
-                camera,
-                dm_ref=np.zeros((34,34)),
+                 dm_channel,
+                 cam_channel,
+                 dm_ref=np.zeros((34,34)),
                  dm_delay=0.01,
-                x_shift=0,
-                y_shift=0,
-                Nims=1,
+                 x_shift=0,
+                 y_shift=0,
+                 Nframes=1,
                  npsf=256,
+                 exp_time=0.001*u.s,
+                 gain=1, 
+                 attenuation=5,
+                 normalize=True, 
                  Imax_ref=None,
-                 exp_time_ref=None,
-                 att_ref=None,
                 ):
         
         # FIXME: make the science camera such that it can be specified
@@ -81,7 +92,11 @@ class SCOOBI():
         
         self.wavelength_c = 633e-9*u.m
         
-        self.camera = camera
+        self.CAM = ImageStream(cam_channel)
+
+        self.dm_channel = dm_channel
+        self.DM = scoob_utils.connect_to_dmshmim(channel=dm_channel) # channel used for writing to DM
+        self.DMT = scoob_utils.connect_to_dmshmim(channel='dm00disp') # the total shared memory image
 
         # Init all DM settings
         self.Nact = 34
@@ -91,14 +106,11 @@ class SCOOBI():
         self.dm_active_diam = 10.2*u.mm
         self.dm_full_diam = 11.1*u.mm
         self.full_stroke = 1.5e-6*u.m
-
-        self.dm_channel = dm_channel
-        self.dmc = utils.connect_to_dmshmim(channel=dm_channel) # channel used for writing to DM
-        self.dmctot = utils.connect_to_dmshmim(channel='dm00disp') # the total shared memory image
         
         self.dm_ref = dm_ref
         self.dm_delay = dm_delay
         self.dm_gain = 1
+        self.reset_dm()
         
         bad_acts = [(21,25)]
         self.bad_acts = []
@@ -114,43 +126,46 @@ class SCOOBI():
         self.dm_zernikes = poppy.zernike.arbitrary_basis(self.dm_mask, nterms=15, outside=0)
 
         # Init camera settings
-        self.cam = utils.connect_to_camshmim()
-        self.npsf = 64
         self.psf_pixelscale = 4.63e-6*u.m/u.pix
         self.psf_pixelscale_lamD = (1/5) * self.psf_pixelscale.to(u.m/u.pix).value/4.63e-6
-        self.Nims = Nims
-        
-        client.wait_for_properties({'exptime'}, timeout=10)
-        self._exp_time = client['scicam.exptime.current']
-        
-        self.exp_time_ref = exp_time_ref
-        self.Imax_ref = Imax_ref
+        self.Nframes = Nframes
         
         self.npsf = npsf
         self.nbits = 16
 
+        self.blacklevel = 63
+        self.gain = gain
+        self.exp_time = exp_time
+        self.attenuation = attenuation
+
         self.normalize = normalize
-        if self.texp_ref is not None and self.Imax_ref is not None:
-            self.imnorm = self.max0 / self.texp0
+        self.Imax_ref = Imax_ref
         
         self.x_shift = x_shift
         self.y_shift = y_shift
 
-        self.use_cupy = False
-
         self.subtract_bias = False
-        self.bias = 5
     
     @property
-    def texp(self):
+    def bias(self):
+        return self._bias
+
+    @bias.setter
+    def bias(self, value):
+        client['nsv571.blacklevel.blacklevel'] = value
+        time.sleep(0.5)
+        self._bias = value
+
+    @property
+    def exp_time(self):
         return self._exp_time
 
-    @texp.setter
-    def texp(self, value):
-        client.wait_for_properties({self.camera+'.exptime'}, timeout=10)
-        client[self.camera+'.exptime.target'] = value
+    @exp_time.setter
+    def exp_time(self, value):
+        client.get_properties()
+        client['nsv571.exptime.exptime'] = value.to_value(u.s)
         time.sleep(0.5)
-        self._exp_time = client[self.camera+'.exptime.current']
+        self._exp_time = value
         
     @property
     def gain(self):
@@ -158,71 +173,73 @@ class SCOOBI():
 
     @gain.setter
     def gain(self, value):
-        client.wait_for_properties({'scicam.emgain'}, timeout=10)
-        client['scicam.emgain.target'] = value
+        if value>10 or value<1:
+            raise ValueError('Gain value cannot be greater than 10 or less than 1.')
+        client['nsv571.gain.gain']= value
         time.sleep(0.5)
-        self._gain = client['scicam.emgain.current']
-    # make something for emgain, client['scicam.emgain.target'] = 20
+        self._gain = value
 
-    # FIXME: need to implement control of the fiber attenuator
     @property
     def attenuation(self):
         return self._attenuation
     
     @attenuation.setter
     def attenuation(self, value):
-        client.wait_for_properties({'fiberatten.target'}, timeout=10)
-        client['fiberatten.target'] = value
+        client['fiberatten.atten.target'] = value
         time.sleep(0.5)
-        # self._attenuation = client['fiberatten.current']
         self._attenuation = value
 
     def zero_dm(self):
-        self.dmc.write(np.zeros(self.dm_shape))
+        self.DM.write(np.zeros(self.dm_shape))
         time.sleep(self.dm_delay)
     
     def reset_dm(self):
-        self.dmc.write(self.dm_ref)
+        self.DM.write(self.dm_ref)
         time.sleep(self.dm_delay)
     
     def set_dm(self, dm_command):
-        self.dmc.write(dm_command*1e6)
+        self.DM.write(dm_command*1e6)
         time.sleep(self.dm_delay)
     
     def add_dm(self, dm_command):
         dm_state = self.get_dm()
-        self.dmc.write( (dm_state + dm_command)*1e6 )
+        self.DM.write( (dm_state + dm_command)*1e6 )
         time.sleep(self.dm_delay)
                
     def get_dm(self, total=False):
         if total:
-            return self.dmctot.grab_latest()/1e6
+            return self.DMT.grab_latest()/1e6
         else:
-            return self.dmc.grab_latest()/1e6
+            return self.DM.grab_latest()/1e6
     
     def show_dm(self):
         imshows.imshow2(self.get_dm(), self.get_dm(total=True), self.dm_channel, 'dm00disp')
     
     def close_dm(self):
-        self.dmc.close()
-        
+        self.DM.close()
+
     def snap(self, nims=None, plot=False, vmin=None):
         
-        Nims = self.nims if nims is None else nims
+        if isinstance(self.Nframes, list):
+            return self.snap_many()
         
-        if self.nims>1:
-            ims = self.cam.grab_many(Nims)
-            im = np.sum(ims, axis=0)/Nims
+        if self.Nframes>1:
+            ims = self.CAM.grab_many(self.Nframes)
+            im = np.sum(ims, axis=0)/self.Nframes
         else:
-            im = self.cam.grab_latest()
-
-        if self.use_cupy:
-            im = xp.array(im)
+            im = self.CAM.grab_latest()
         
+        im = xp.array(im)
         im = _scipy.ndimage.shift(im, (self.y_shift, self.x_shift), order=0)
         im = pad_or_crop(im, self.npsf)
-        if self.normalize and self.texp_ref is not None and self.Imax_ref is not None:
-            im *= (1/self.Imax_ref) * (self.texp_ref/self.texp)
+
+        if self.subtract_bias:
+            im -= self.bias
+            
+        if self.normalize:
+            im *= (self.attenuation) * (1/self.gain) * (1/self.exp_time.to_value(u.s))
+            if self.Imax_ref is not None:
+                im /= self.Imax_ref
             
         if plot:
             imshows.imshow1(im, lognorm=True, pxscl=self.psf_pixelscale_lamD, grid=True, vmin=vmin)
@@ -267,20 +284,6 @@ class SCOOBI():
             flux_frame[pixel_sat_mask] = 0
             pixel_weights += ~pixel_sat_mask
             total_flux += flux_frame
-
-        # total_flux = 0.0
-        # pixel_weights = 0.0
-        # for i in range(len(self.exp_times_list)):
-        #     flux_im = copy.copy(ims[i])
-        #     flux_im[im_masks[i]] = 0
-        #     pixel_weights += ~im_masks[i]
-        #     flux_im /= self.exp_times_list[i]
-
-        #     if plot: 
-        #         imshows.imshow2(flux_im, pixel_weights, 
-        #                         f'Masked Flux Image: \nExposure time: {self.exp_times_list[i]:.2e}s', 
-        #                         lognorm1=True)
-        #     total_flux += flux_im
             
         total_flux_frame = total_flux/pixel_weights
 
