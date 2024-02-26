@@ -126,8 +126,8 @@ class SCOOBI():
         self.dm_zernikes = poppy.zernike.arbitrary_basis(self.dm_mask, nterms=15, outside=0)
 
         # Init camera settings
-        self.psf_pixelscale = 4.63e-6*u.m/u.pix
-        self.psf_pixelscale_lamD = (1/5) * self.psf_pixelscale.to(u.m/u.pix).value/4.63e-6
+        self.psf_pixelscale = 3.76e-6*u.m/u.pix
+        self.psf_pixelscale_lamD = 0.2711864406779661
         self.Nframes = Nframes
         
         self.npsf = npsf
@@ -137,6 +137,8 @@ class SCOOBI():
         self.gain = gain
         self.exp_time = exp_time
         self.attenuation = attenuation
+
+        self.att_ref = None
 
         self.normalize = normalize
         self.Imax_ref = Imax_ref
@@ -194,23 +196,23 @@ class SCOOBI():
         time.sleep(self.dm_delay)
     
     def reset_dm(self):
-        self.DM.write(self.dm_ref)
+        self.DM.write(ensure_np_array(self.dm_ref))
         time.sleep(self.dm_delay)
     
     def set_dm(self, dm_command):
-        self.DM.write(dm_command*1e6)
+        self.DM.write(ensure_np_array(dm_command)*1e6)
         time.sleep(self.dm_delay)
     
     def add_dm(self, dm_command):
-        dm_state = self.get_dm()
-        self.DM.write( (dm_state + dm_command)*1e6 )
+        dm_state = ensure_np_array(self.get_dm())
+        self.DM.write( 1e6*(dm_state + ensure_np_array(dm_command)) )
         time.sleep(self.dm_delay)
                
     def get_dm(self, total=False):
         if total:
-            return self.DMT.grab_latest()/1e6
+            return xp.array(self.DMT.grab_latest())/1e6
         else:
-            return self.DM.grab_latest()/1e6
+            return xp.array(self.DM.grab_latest())/1e6
     
     def show_dm(self):
         imshows.imshow2(self.get_dm(), self.get_dm(total=True), self.dm_channel, 'dm00disp')
@@ -236,8 +238,9 @@ class SCOOBI():
         if self.subtract_bias:
             im -= self.bias
             
-        if self.normalize:
-            im *= (self.attenuation) * (1/self.gain) * (1/self.exp_time.to_value(u.s))
+        if self.normalize and self.att_ref is not None:
+            im *= (1/self.gain) * (1/self.exp_time.to_value(u.s))
+            im *= 10**((self.attenuation-self.att_ref)/10) 
             if self.Imax_ref is not None:
                 im /= self.Imax_ref
             
