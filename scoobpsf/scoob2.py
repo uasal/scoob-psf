@@ -26,7 +26,7 @@ class SCOOBM():
                  npix=256, 
                  oversample=4,
                  use_llowfsc=False,
-                 lyot_diam=9.26*u.mm, 
+                 lyot_diam=8.7*u.mm, 
                  npsf=400, 
                  psf_pixelscale=3.76*u.um/u.pix,
                  psf_pixelscale_lamD=None,
@@ -79,37 +79,6 @@ class SCOOBM():
             self.wavelength = self.wavelength_c
         else: 
             self.wavelength = wavelength
-        
-        # focal lengths of powered optics 
-        self.fl_oap1 = 254/2*u.mm
-        self.fl_oap2 = 346/2*u.mm
-        self.fl_oap3 = 914.4/2*u.mm
-        self.fl_oap4 = 914/2*u.mm
-        self.fl_oap5 = 346/2*u.mm
-        self.fl_oap6 = 254/2*u.mm
-        self.fl_oap7 = 609.6/2*u.mm
-
-        self.d_stop_oap1 = self.fl_oap1
-        self.d_oap1_ifp1 = self.fl_oap1
-        self.d_ifp1_oap2 = self.fl_oap2
-        self.d_oap2_DM = self.fl_oap2
-        self.d_DM_oap3 = self.fl_oap3 # I need to actually place the LP and QWP before OAP3
-        self.d_oap3_FPM = self.fl_oap3
-        self.d_FPM_flat1 = 257*u.mm
-        self.d_flat1_oap4 = self.fl_oap4 - self.d_FPM_flat1
-        self.d_oap4_flat2 = 250*u.mm
-        self.d_flat2_LYOT = self.fl_oap4 - self.d_oap4_flat2
-        self.d_LYOT_oap5 = self.fl_oap5
-        self.d_oap5_ifp2 = self.fl_oap5
-        self.d_ifp2_oap6 = self.fl_oap6
-        self.d_oap6_oap7 = 481*u.mm
-        self.d_oap7_CAM = self.fl_oap7 - 8.61148555e-06*u.m
-
-        self.flat1_diam = 25.4*u.mm
-        self.flat2_diam = 25.4*u.mm
-        self.oap1_diam = 25.4*u.mm
-        self.oap2_diam = 25.4*u.mm
-        self.oap3_diam = 25.4*u.mm
 
         self.npix = int(npix)
         self.oversample = oversample
@@ -286,7 +255,7 @@ class SCOOBM():
         # define optics 
         one_inch = poppy.CircularAperture(radius=25.4*u.mm/2, name='1in Aperture',)
         
-        pupil_stop = poppy.CircularAperture(radius=self.pupil_diam/2, name='Pupil Stop/FSM')
+        pupil_stop = poppy.CircularAperture(radius=self.pupil_diam/2, name='Pupil: Stop/FSM')
         oap1 = poppy.QuadraticLens(self.fl_oap1, name='OAP1')
         oap2 = poppy.QuadraticLens(self.fl_oap2, name='OAP2')
         oap3 = poppy.QuadraticLens(self.fl_oap3, name='OAP3')
