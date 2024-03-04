@@ -47,13 +47,13 @@ def move_psf(x_pos, y_pos):
 
 def set_zwo_roi(xc, yc, npix):
     # update roi parameters
-    client.wait_for_properties(['scicam.roi_region_x', 'scicam.roi_region_y', 'scicam.roi_region_h' ,'scicam.roi_region_w', 'scicam.roi_set'])
-    client['scicam.roi_region_x.target'] = xc
-    client['scicam.roi_region_y.target'] = yc
-    client['scicam.roi_region_h.target'] = npix
-    client['scicam.roi_region_w.target'] = npix
+    client0.wait_for_properties(['scicam.roi_region_x', 'scicam.roi_region_y', 'scicam.roi_region_h' ,'scicam.roi_region_w', 'scicam.roi_set'])
+    client0['scicam.roi_region_x.target'] = xc
+    client0['scicam.roi_region_y.target'] = yc
+    client0['scicam.roi_region_h.target'] = npix
+    client0['scicam.roi_region_w.target'] = npix
     time.sleep(1)
-    client['scicam.roi_set.request'] = purepyindi.SwitchState.ON
+    client0['scicam.roi_set.request'] = purepyindi.SwitchState.ON
     time.sleep(1)
     
 def move_pol(rel_pos): # this will change the throughput by rotating the polarizer
@@ -148,15 +148,15 @@ class SCOOBI():
 
         self.subtract_bias = False
     
-    @property
-    def bias(self):
-        return self._bias
+    # @property
+    # def bias(self):
+    #     return self._bias
 
-    @bias.setter
-    def bias(self, value):
-        client['nsv571.blacklevel.blacklevel'] = value
-        time.sleep(0.5)
-        self._bias = value
+    # @bias.setter
+    # def bias(self, value):
+    #     client['nsv571.blacklevel.blacklevel'] = value
+    #     time.sleep(0.5)
+    #     self._bias = value
 
     @property
     def exp_time(self):
@@ -165,21 +165,25 @@ class SCOOBI():
     @exp_time.setter
     def exp_time(self, value):
         client.get_properties()
-        client['nsv571.exptime.exptime'] = value.to_value(u.s)
-        time.sleep(0.5)
-        self._exp_time = value
+        # client['nsv571.exptime.exptime'] = value.to_value(u.s)
+        # time.sleep(0.5)
+        # self._exp_time = value
+        client0.wait_for_properties(['scicam_2600.exptime'])
+        client0['scicam_2600.exptime.target'] = value.to_value(u.s)
+        time.sleep(0.2)
+        self._exp_time = client0['scicam_2600.exptime.current'] * u.s 
         
-    @property
-    def gain(self):
-        return self._gain
+    # @property
+    # def gain(self):
+    #     return self._gain
 
-    @gain.setter
-    def gain(self, value):
-        if value>10 or value<1:
-            raise ValueError('Gain value cannot be greater than 10 or less than 1.')
-        client['nsv571.gain.gain']= value
-        time.sleep(0.5)
-        self._gain = value
+    # @gain.setter
+    # def gain(self, value):
+    #     if value>10 or value<1:
+    #         raise ValueError('Gain value cannot be greater than 10 or less than 1.')
+    #     client['nsv571.gain.gain']= value
+    #     time.sleep(0.5)
+    #     self._gain = value
 
     @property
     def attenuation(self):
@@ -238,9 +242,8 @@ class SCOOBI():
         if self.subtract_bias:
             im -= self.bias
             
-        if self.normalize and self.att_ref is not None:
-            im *= (1/self.gain) * (1/self.exp_time.to_value(u.s))
-            im *= 10**((self.attenuation-self.att_ref)/10) 
+        if self.normalize:
+            im *= (1/self.gain) * 10**(self.attenuation/10) * (1/self.exp_time.to_value(u.s))
             if self.Imax_ref is not None:
                 im /= self.Imax_ref
             

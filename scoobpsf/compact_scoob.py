@@ -218,7 +218,7 @@ class SCOOB():
         self.set_dm(dm_ref)
 
         self.dm_diam = 10.2*u.mm
-        self.dm_pupil_diam = 9.6*u.mm
+        self.dm_pupil_diam = 9.2*u.mm
         self.dm_fill_factor = (self.dm_pupil_diam/self.dm_diam).decompose().value
 
         self.lyot_stop_diam = 8.7*u.mm
