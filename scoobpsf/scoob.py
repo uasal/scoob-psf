@@ -26,8 +26,7 @@ class SCOOBM():
                  npix=256, 
                  oversample=4,
                  use_llowfsc=False,
-                 lyot_diam=9.26*u.mm, 
-                 npsf=400, 
+                 npsf=256, 
                  psf_pixelscale=3.76*u.um/u.pix,
                  psf_pixelscale_lamD=None,
                  Imax_ref=1,
@@ -102,8 +101,9 @@ class SCOOBM():
         self.d_LYOT_oap5 = self.fl_oap5
         self.d_oap5_ifp2 = self.fl_oap5
         self.d_ifp2_oap6 = self.fl_oap6
-        self.d_oap6_oap7 = 481*u.mm
-        self.d_oap7_CAM = self.fl_oap7 - 8.61148555e-06*u.m
+        self.d_oap6_oap7 = self.fl_oap6+self.fl_oap7
+        # self.d_oap6_oap7 = 481*u.mm
+        self.d_oap7_CAM = self.fl_oap7
 
         self.flat1_diam = 25.4*u.mm
         self.flat2_diam = 25.4*u.mm
@@ -119,8 +119,9 @@ class SCOOBM():
         self.source_offset = source_offset
         
         self.npsf = npsf
-        self.lyot_diam = lyot_diam
-        self.um_per_lamD = (self.fl_oap7*self.wavelength_c/(lyot_diam)).to(u.um)
+        self.lyot_pupil_diam = 9.19*u.mm
+
+        self.um_per_lamD = (self.fl_oap7*self.wavelength_c/(self.lyot_pupil_diam)).to(u.um)
         if psf_pixelscale_lamD is None: # overrides psf_pixelscale this way
             self.psf_pixelscale = psf_pixelscale
             self.psf_pixelscale_lamD =  self.psf_pixelscale.to_value(u.um/u.pix) / self.um_per_lamD.value
@@ -180,9 +181,10 @@ class SCOOBM():
         setattr(self, attr, val)
 
     def init_dm(self):
-        self.DM = dm.DeformableMirror()
+        self.Nact = 34
+        self.dm_sampling = self.npix/self.Nact # pixels per actuator
+        self.DM = dm.DeformableMirror(name='DM (Pupil)', inf_sampling=self.dm_sampling)
 
-        self.Nact = self.DM.Nact
         self.Nacts = self.DM.Nacts
         self.act_spacing = self.DM.act_spacing
         self.dm_active_diam = self.DM.active_diam
@@ -296,6 +298,8 @@ class SCOOBM():
         oap7 = poppy.QuadraticLens(self.fl_oap7, name='OAP7')
         
         ifp1 = poppy.ScalarTransmission(name='IFP1')
+        fpm_plane = poppy.ScalarTransmission(name='FPM')
+        fielstop_plane = poppy.ScalarTransmission(name='Fieldstop FP')
 
         flat1 = poppy.CircularAperture(radius=25.4*u.mm/2, name='Fold Flat 1',)
         flat2 = poppy.CircularAperture(radius=25.4*u.mm/2, name='Fold Flat 2',)
@@ -333,7 +337,8 @@ class SCOOBM():
             fosys.add_optic(poppy.Detector(pixelscale=self.psf_pixelscale, fov_pixels=self.nzwfs, interp_order=3, name='Focal Plane'),  
                             distance=fl_zwfs_lens)
             return fosys
-        fosys.add_optic(FPM, distance=self.d_oap3_FPM)
+        fosys.add_optic(fpm_plane, distance=self.d_oap3_FPM)
+        fosys.add_optic(FPM,)
         fosys.add_optic(flat1, distance=self.d_FPM_flat1)
         if self.use_aps: fosys.add_optic(one_inch)
         fosys.add_optic(oap4, distance=self.d_flat1_oap4)
@@ -347,10 +352,11 @@ class SCOOBM():
                             distance=self.fl_llowfsc_lens + self.llowfsc_defocus)
             return fosys
         fosys.add_optic(oap5, distance=self.d_LYOT_oap5)
-        fosys.add_optic(FIELDSTOP, distance=self.d_oap5_ifp2)
+        fosys.add_optic(fielstop_plane, distance=self.d_oap5_ifp2)
+        fosys.add_optic(FIELDSTOP,)
         fosys.add_optic(oap6, distance=self.d_ifp2_oap6)
         fosys.add_optic(oap7, distance=self.d_oap6_oap7)
-        fosys.add_optic(poppy.Detector(pixelscale=self.psf_pixelscale, fov_pixels=self.npsf, interp_order=3, name='Focal Plane'),
+        fosys.add_optic(poppy.Detector(pixelscale=self.psf_pixelscale, fov_pixels=self.npsf, interp_order=3, name='Camera FP'),
                         distance=self.d_oap7_CAM)
 
         return fosys
@@ -376,8 +382,12 @@ class SCOOBM():
         start = time.time()
         if not quiet: print(f'Propagating wavelength {self.wavelength.to(u.nm):.3f}.')
         fosys = self.init_fosys()
-        self.init_inwave()
-        _, wfs = fosys.calc_psf(inwave=self.inwave, normalize=self.norm, return_intermediates=True)
+        inwave = poppy.FresnelWavefront(beam_radius=self.pupil_diam/2, wavelength=self.wavelength,
+                                        npix=self.npix, oversample=self.oversample)
+        if self.source_offset[0]>0 or self.source_offset[1]>0:
+            inwave.tilt(Xangle=self.source_offset[0]*self.as_per_lamD, Yangle=self.source_offset[1]*self.as_per_lamD)
+        
+        _, wfs = fosys.calc_psf(inwave=inwave, normalize='none', return_intermediates=True)
         if not quiet: print(f'PSF calculated in {(time.time()-start):.3f}s')
         
         # Normalize the detector image
@@ -410,11 +420,8 @@ class SCOOBM():
             inwave.tilt(Xangle=self.source_offset[0]*self.as_per_lamD, Yangle=self.source_offset[1]*self.as_per_lamD)
         
         _, wfs = fosys.calc_psf(inwave=inwave, normalize='none', return_final=True, return_intermediates=False)
-
         wf = utils.rotate_arr(wfs[-1].wavefront, -self.det_rotation) if abs(self.det_rotation)>0 else wfs[-1].wavefront
-
         wf /= np.sqrt(self.Imax_ref) # Normalize by the unocculted PSF peak
-
         return wf
     
     def snap(self,):

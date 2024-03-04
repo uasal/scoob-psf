@@ -69,7 +69,8 @@ class DeformableMirror(poppy.AnalyticOpticalElement):
                  include_reflection=True,
                  inf_fun=None,
                  inf_cube=None,
-                 inf_sampling=None,
+                 inf_sampling=10, # sampling in pixels per actuator
+                 coupling=0.15, # coupling of one actuator onto an adjacent actuator
                  name='DM',
                 ):
         
@@ -90,19 +91,19 @@ class DeformableMirror(poppy.AnalyticOpticalElement):
         self.command = xp.zeros((self.Nact, self.Nact))
         self.actuators = xp.zeros(self.Nacts)
         
-        if inf_fun is not None and inf_sampling is not None:
+        if inf_fun is not None:
             print('Using the influence function supplied.')
             self.inf_fun = inf_fun
             self.inf_sampling = inf_sampling
             self.inf_matrix = None
-        elif inf_cube is not None and inf_sampling is not None:
+        elif inf_cube is not None:
             print('Using the influence function cube supplied.')
             self.inf_matrix = inf_cube.reshape(self.Nacts, self.inf_cube.shape[1]**2,).T
             self.inf_sampling = inf_sampling
             self.inf_fun = None
         elif inf_fun is None and inf_cube is None:
             print('Using default Gaussian influence function.')
-            self.inf_fun, self.inf_sampling = make_gaussian_inf_fun(act_spacing=300e-6*u.m, sampling=10, coupling=0.15,)
+            self.inf_fun, self.inf_sampling = make_gaussian_inf_fun(act_spacing=act_spacing, sampling=inf_sampling, coupling=coupling,)
             self.inf_matrix = None
             
         self.inf_pixelscale = self.act_spacing/(self.inf_sampling*u.pix)
