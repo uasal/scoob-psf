@@ -40,7 +40,7 @@ class SCOOBM():
                  inf_fun=None,
                  dm_ref=xp.zeros((34,34)),
                  bad_acts=None,
-                 RETRIEVED=None,
+                 WFE=None,
                  ZWFS=None,
                  FPM=None,
                  LYOT=None,
@@ -136,7 +136,7 @@ class SCOOBM():
         self.use_pupil_grating = use_pupil_grating
         self.use_aps = use_aps
         
-        self.RETRIEVED = poppy.ScalarTransmission(name='Phase Retrieval Place-holder') if RETRIEVED is None else RETRIEVED
+        self.WFE = poppy.ScalarTransmission(name='Input WFE Place-holder') if WFE is None else WFE
         self.FPM = poppy.ScalarTransmission(name='Focal Plane Mask Place-holder') if FPM is None else FPM
         self.LYOT = poppy.ScalarTransmission(name='Lyot Stop Place-holder') if LYOT is None else LYOT
         self.FIELDSTOP = poppy.ScalarTransmission(name='Field stop Place-holder') if FIELDSTOP is None else FIELDSTOP
@@ -280,7 +280,7 @@ class SCOOBM():
     
     def init_fosys(self):
         
-        RETRIEVED = poppy.ScalarTransmission() if self.RETRIEVED is None else self.RETRIEVED
+        WFE = poppy.ScalarTransmission() if self.WFE is None else self.WFE
         FPM = poppy.ScalarTransmission() if self.FPM is None else self.FPM
         LYOT = poppy.ScalarTransmission() if self.LYOT is None else self.LYOT
         FIELDSTOP = poppy.ScalarTransmission() if self.FIELDSTOP is None else self.FIELDSTOP
@@ -310,7 +310,7 @@ class SCOOBM():
         self.N = int(self.npix*self.oversample)
         fosys = poppy.FresnelOpticalSystem(pupil_diameter=self.pupil_diam, npix=self.npix, beam_ratio=1/self.oversample)
         fosys.add_optic(pupil_stop)
-        fosys.add_optic(RETRIEVED)
+        fosys.add_optic(WFE)
         if self.use_opds: fosys.add_optic(self.flat1_opd)
         if self.use_pupil_grating:
             self.init_pupil_grating()
