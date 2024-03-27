@@ -172,7 +172,9 @@ class SCOOBM():
         self.dm_ref = dm_ref
         self.set_dm(dm_ref)
         
-    
+        self.return_pupil = False
+        self.return_lyot = False
+            
     # useful for parallelization with ray actors
     def getattr(self, attr):
         return getattr(self, attr)
@@ -324,19 +326,11 @@ class SCOOBM():
         if self.use_opds: fosys.add_optic(self.oap2_opd)
         fosys.add_optic(self.DM, distance=self.d_oap2_DM)
         if self.use_aps: fosys.add_optic(DM_aperture)
+        if self.return_pupil:
+            return fosys
         fosys.add_optic(oap3, distance=self.d_DM_oap3)
         if self.use_aps: fosys.add_optic(one_inch)
         if self.use_opds: fosys.add_optic(self.oap3_opd)
-        if self.ZWFS is not None:
-            fosys.add_optic(self.ZWFS, distance=self.d_oap3_FPM)
-            fl_zwfs_lens = 75*u.mm
-            zwfs_lens = poppy.QuadraticLens(fl_zwfs_lens)
-            fosys.add_optic(zwfs_lens, distance=fl_zwfs_lens)
-            self.zwfs_pixelscale = 5*u.um/u.pix
-            self.nzwfs = 400
-            fosys.add_optic(poppy.Detector(pixelscale=self.psf_pixelscale, fov_pixels=self.nzwfs, interp_order=3, name='Focal Plane'),  
-                            distance=fl_zwfs_lens)
-            return fosys
         fosys.add_optic(fpm_plane, distance=self.d_oap3_FPM)
         fosys.add_optic(FPM,)
         fosys.add_optic(flat1, distance=self.d_FPM_flat1)
@@ -344,6 +338,8 @@ class SCOOBM():
         fosys.add_optic(oap4, distance=self.d_flat1_oap4)
         fosys.add_optic(flat2, distance=self.d_oap4_flat2)
         fosys.add_optic(lyot_plane, distance=self.d_flat2_LYOT)
+        if self.return_lyot:
+            return fosys
         fosys.add_optic(LYOT)
         if self.use_llowfsc:
             llowfsc_lens = poppy.QuadraticLens(self.fl_llowfsc_lens, name='Lens')
