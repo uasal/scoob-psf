@@ -135,7 +135,9 @@ class SCOOBM():
         
         self.use_pupil_grating = use_pupil_grating
         self.use_aps = use_aps
-        
+        wf = poppy.Wavefront(diam=self.pupil_diam, npix=self.npix, oversample=1)
+        self.pupil_mask = poppy.CircularAperture(radius=self.pupil_diam/2, name='Pupil').get_transmission(wf).astype(bool)
+
         self.WFE = poppy.ScalarTransmission(name='Input WFE Place-holder') if WFE is None else WFE
         self.FPM = poppy.ScalarTransmission(name='Focal Plane Mask Place-holder') if FPM is None else FPM
         self.LYOT = poppy.ScalarTransmission(name='Lyot Stop Place-holder') if LYOT is None else LYOT
