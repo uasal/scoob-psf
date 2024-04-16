@@ -148,8 +148,8 @@ class SCOOBM():
         self.use_llowfsc = use_llowfsc
         self.llowfsc_pixelscale = 3.76*u.um/u.pix # Sony IMX571
         self.nllowfsc = 64
-        self.llowfsc_defocus = 2.5*u.mm
-        self.fl_llowfsc_lens = 200*u.mm
+        self.llowfsc_defocus = 1.25*u.mm
+        self.fl_llowfsc_lens = 100*u.mm
 
         self.distances = {
             ### FIXME: we should implement the distances as a dictionary that gets loaded in by a toml file
@@ -393,7 +393,7 @@ class SCOOBM():
         
         return wfs
     
-    def calc_wf(self,): 
+    def calc_wf(self, pixelscale=False): 
         '''
         This propagates a beam from start to finish and returns the complex 
         wavefront.
@@ -420,7 +420,10 @@ class SCOOBM():
         _, wfs = fosys.calc_psf(inwave=inwave, normalize='none', return_final=True, return_intermediates=False)
         wf = utils.rotate_arr(wfs[-1].wavefront, -self.det_rotation) if abs(self.det_rotation)>0 else wfs[-1].wavefront
         wf /= np.sqrt(self.Imax_ref) # Normalize by the unocculted PSF peak
-        return wf
+        if pixelscale:
+            return wf, wfs[-1].pixelscale
+        else:
+            return wf
     
     def snap(self,):
         '''

@@ -182,7 +182,7 @@ def imshow3(arr1, arr2, arr3,
     npix1, npix2, npix3 = (npix, npix, npix) if npix is not None else (npix1, npix2, npix3)
     if npix1 is not None: arr1 = utils.pad_or_crop(arr1, npix1)
     if npix2 is not None: arr2 = utils.pad_or_crop(arr2, npix2)
-    if npix3 is not None: arr2 = utils.pad_or_crop(arr3, npix3)
+    if npix3 is not None: arr3 = utils.pad_or_crop(arr3, npix3)
     
     pxscl1, pxscl2, pxscl3 = (pxscl, pxscl, pxscl) if pxscl is not None else (pxscl1, pxscl2, pxscl3)
     if pxscl1 is not None:
@@ -226,7 +226,7 @@ def imshow3(arr1, arr2, arr3,
     
     norm1 = LogNorm(vmin=vmin1,vmax=vmax1) if lognorm1 or lognorm else Normalize(vmin=vmin1,vmax=vmax1)
     norm2 = LogNorm(vmin=vmin2,vmax=vmax2) if lognorm2 or lognorm else Normalize(vmin=vmin2,vmax=vmax2)
-    norm3 = LogNorm(vmin=vmin2,vmax=vmax2) if lognorm3 or lognorm else Normalize(vmin=vmin3,vmax=vmax3)
+    norm3 = LogNorm(vmin=vmin3,vmax=vmax3) if lognorm3 or lognorm else Normalize(vmin=vmin3,vmax=vmax3)
     
     # first plot
     im = ax[0].imshow(arr1, cmap=cmap1, norm=norm1, extent=extent1)
