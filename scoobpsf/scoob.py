@@ -120,8 +120,9 @@ class SCOOBM():
         
         self.npsf = npsf
         self.lyot_pupil_diam = 9.19*u.mm
+        self.lyot_stop_diam = 8.6*u.mm
 
-        self.um_per_lamD = (self.fl_oap7*self.wavelength_c/(self.lyot_pupil_diam)).to(u.um)
+        self.um_per_lamD = (self.fl_oap7*self.wavelength_c/(self.lyot_stop_diam)).to(u.um)
         if psf_pixelscale_lamD is None: # overrides psf_pixelscale this way
             self.psf_pixelscale = psf_pixelscale
             self.psf_pixelscale_lamD =  self.psf_pixelscale.to_value(u.um/u.pix) / self.um_per_lamD.value
@@ -148,7 +149,7 @@ class SCOOBM():
         self.use_llowfsc = use_llowfsc
         self.llowfsc_pixelscale = 3.76*u.um/u.pix # Sony IMX571
         self.nllowfsc = 64
-        self.llowfsc_defocus = 1.25*u.mm
+        self.llowfsc_defocus = 0.9*u.mm
         self.fl_llowfsc_lens = 100*u.mm
 
         self.distances = {
