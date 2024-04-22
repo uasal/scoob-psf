@@ -167,3 +167,43 @@ def load_pickle(fpath):
     infile.close()
     return pkl_data
 
+
+def generate_wfe(diam, 
+                 npix=256, oversample=1, 
+                 wavelength=500*u.nm,
+                 opd_index=2.5, amp_index=2, 
+                 opd_seed=1234, amp_seed=12345,
+                 opd_rms=10*u.nm, amp_rms=0.05,
+                 remove_modes=3, # defaults to removing piston, tip, and tilt
+                 ):
+    wf = poppy.FresnelWavefront(beam_radius=diam/2, npix=npix, oversample=oversample, wavelength=wavelength)
+    wfe_opd = poppy.StatisticalPSDWFE(index=opd_index, wfe=opd_rms, radius=diam/2, seed=opd_seed).get_opd(wf)
+    wfe_amp = poppy.StatisticalPSDWFE(index=amp_index, wfe=amp_rms*u.nm, radius=diam/2, seed=amp_seed).get_opd(wf)
+    
+    wfe_amp = xp.asarray(wfe_amp)
+    wfe_opd = xp.asarray(wfe_opd)
+
+    mask = poppy.CircularAperture(radius=diam/2).get_transmission(wf)>0
+    Zs = poppy.zernike.arbitrary_basis(mask, nterms=remove_modes, outside=0)
+    
+    Zc_amp = lstsq(Zs, wfe_amp)
+    Zc_opd = lstsq(Zs, wfe_opd)
+    for i in range(3):
+        wfe_amp -= Zc_amp[i] * Zs[i]
+        wfe_opd -= Zc_opd[i] * Zs[i]
+
+    mask = poppy.CircularAperture(radius=diam/2).get_transmission(wf)>0
+    wfe_rms = xp.sqrt(xp.mean(xp.square(wfe_opd[mask])))
+    wfe_opd *= opd_rms.to_value(u.m)/wfe_rms
+
+    wfe_amp = wfe_amp*1e9 + 1
+
+    wfe_amp_rms = xp.sqrt(xp.mean(xp.square(wfe_amp[mask]-1)))
+    wfe_amp *= amp_rms/wfe_amp_rms
+
+    wfe = wfe_amp * xp.exp(1j*2*np.pi/wavelength.to_value(u.m) * wfe_opd)
+    wfe *= poppy.CircularAperture(radius=diam/2).get_transmission(wf)
+
+    return wfe, mask
+
+

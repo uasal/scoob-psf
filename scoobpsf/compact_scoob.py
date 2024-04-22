@@ -18,8 +18,12 @@ from . import utils
 import hcipy
 from scipy.signal import windows
 
-def make_vortex_phase_mask(focal_grid_polar, charge=6, 
-                           singularity=None, focal_length=500*u.mm, pupil_diam=9.7*u.mm, wavelength=632.8*u.nm):
+def make_vortex_phase_mask(focal_grid_polar, 
+                           charge=6, 
+                           singularity=None, 
+                           focal_length=500*u.mm, 
+                           pupil_diam=10*u.mm, 
+                           wavelength=633*u.nm):
     
     r = focal_grid_polar[0]
     th = focal_grid_polar[1]
@@ -34,11 +38,11 @@ def make_vortex_phase_mask(focal_grid_polar, charge=6,
     return phasor
 
 def fft(arr):
-    ftarr = xp.fft.fftshift(xp.fft.fft2(xp.fft.ifftshift(arr)))
+    ftarr = xp.fft.fftshift(xp.fft.fft2(xp.fft.fftshift(arr)))
     return ftarr
 
 def ifft(arr):
-    iftarr = xp.fft.ifftshift(xp.fft.ifft2(xp.fft.fftshift(arr)))
+    iftarr = xp.fft.ifftshift(xp.fft.ifft2(xp.fft.ifftshift(arr)))
     return iftarr
 
 def mft(plane, nlamD, npix, offset=None, inverse=False, centering='FFTSTYLE'):
@@ -187,6 +191,7 @@ def mft(plane, nlamD, npix, offset=None, inverse=False, centering='FFTSTYLE'):
     norm_coeff = np.sqrt((nlamDY * nlamDX) / (npupY * npupX * npixY * npixX))
     return norm_coeff * t2
 
+
 class SCOOB():
 
     def __init__(self, 
@@ -199,6 +204,7 @@ class SCOOB():
                  dm_ref=np.zeros((34,34)),
                  bad_acts=None,
                  Imax_ref=None,
+                 APERTURE=None, 
                  WFE=None,
                  FPM=None,
                  LYOT=None,
@@ -236,6 +242,7 @@ class SCOOB():
 
         self.Imax_ref = Imax_ref
         
+        self.APERTURE = APERTURE
         self.WFE = WFE
         self.FPM = FPM
         self.LYOT = LYOT
@@ -243,7 +250,9 @@ class SCOOB():
         
         self.reverse_parity = True
 
-        self.init_grids()
+        self.use_llowfsc = False
+        self.llowfsc_defocus = 0.9*u.mm
+        self.llowfsc_fl = 100*u.mm
         
     def getattr(self, attr):
         return getattr(self, attr)
@@ -297,98 +306,89 @@ class SCOOB():
         wavefront *= xp.exp(1j*2*np.pi/self.wavelength.to_value(u.m) * dm_surf)
         return wavefront
     
-
-    def init_grids(self):
+    def make_grid(self, which='pupil', polar=False):
         self.pupil_pixelscale = self.pupil_diam.to_value(u.m) / self.npix
         
-        x_pp = ( xp.linspace(-self.N/2, self.N/2-1, self.N) + 1/2 ) * self.pupil_pixelscale
-        ppx, ppy = xp.meshgrid(x_pp, x_pp)
-        ppr = xp.sqrt(ppx**2 + ppy**2)
-        ppth = xp.arctan2(ppy,ppx)
-        
-        self.pupil_grid_polar = xp.array([ppr, ppth])
-        
-        self.focal_pixelscale_lamD = 1/self.oversample
-        x_fp = ( xp.linspace(-self.N/2, self.N/2-1, self.N)) * self.focal_pixelscale_lamD
-        fpx, fpy = xp.meshgrid(x_fp, x_fp)
-        fpr = xp.sqrt(fpx**2 + fpy**2)
-        fpth = xp.arctan2(fpy,fpx)
-        
-        self.focal_grid_polar = xp.array([fpr, fpth])
-        
-        x_im = ( xp.linspace(-self.npsf/2, self.npsf/2-1, self.npsf) + 1/2 ) * self.psf_pixelscale_lamD
-        imx, imy = xp.meshgrid(x_im, x_im)
-        imr = xp.sqrt(imx**2 + imy**2)
-        imth = xp.arctan2(imy,imx)
-        
-        self.im_grid_cart = xp.array([imx, imy])
-        self.im_grid_polar = xp.array([imr, imth])
+        if which=='pupil':
+            x, y = utils.make_grid(self.npix, self.pupil_pixelscale)
+        elif which=='fpm' or which=='focal':
+            x,y = utils.make_grid(self.N, 1/self.oversample)
+        elif which=='image' or which=='im':
+            x,y = utils.make_grid(self.Npsf, self.psf_pixelscale_lamD)
+
+        if polar:
+            r = xp.sqrt(x**2 + y**2)
+            th = xp.arctan2(y,x)
+            return xp.array([r,th])
+        else:
+            return xp.array([x,y])
     
-    def apply_vortex(self, pupil_wavefront, Nprops=4, window_size=32):
+    # def apply_vortex(self, pupil_wavefront, Nprops=4, window_size=32):
 
-        for i in range(Nprops):
-            if i==0: # this is the generic FFT step
-                focal_pixelscale_lamD = 1/self.oversample
-                x_fp = ( xp.linspace(-self.N/2, self.N/2-1, self.N) + 1/2 ) * focal_pixelscale_lamD
-                fpx, fpy = xp.meshgrid(x_fp, x_fp)
-                focal_grid = xp.array([xp.sqrt(fpx**2 + fpy**2), xp.arctan2(fpy,fpx)])
+    #     for i in range(Nprops):
+    #         if i==0: # this is the generic FFT step
+    #             focal_pixelscale_lamD = 1/self.oversample
+    #             x_fp = ( xp.linspace(-self.N/2, self.N/2-1, self.N) + 1/2 ) * focal_pixelscale_lamD
+    #             fpx, fpy = xp.meshgrid(x_fp, x_fp)
+    #             focal_grid = xp.array([xp.sqrt(fpx**2 + fpy**2), xp.arctan2(fpy,fpx)])
 
-                vortex = make_vortex_phase_mask(focal_grid, charge=6, )
+    #             vortex = make_vortex_phase_mask(focal_grid, charge=6, )
 
-                wx = xp.array(windows.tukey(window_size, 1, False))
-                wy = xp.array(windows.tukey(window_size, 1, False))
-                w = xp.outer(wy, wx)
-                w = xp.pad(w, (focal_grid[0].shape[0] - w.shape[0]) // 2, 'constant')
-                vortex *= 1 - w
+    #             wx = xp.array(windows.tukey(window_size, 1, False))
+    #             wy = xp.array(windows.tukey(window_size, 1, False))
+    #             w = xp.outer(wy, wx)
+    #             w = xp.pad(w, (focal_grid[0].shape[0] - w.shape[0]) // 2, 'constant')
+    #             vortex *= 1 - w
                 
-                next_pixelscale = w*focal_pixelscale_lamD/self.N # for the next propagation iteration
+    #             next_pixelscale = w*focal_pixelscale_lamD/self.N # for the next propagation iteration
 
-                # E_LS = E_pup
-            else: # this will handle the MFT stages
+    #             # E_LS = E_pup
+    #         else: # this will handle the MFT stages
 
-                mft_pixelscale_lamD = next_pixelscale
-                nmft = 128
-                nlamD = mft_pixelscale_lamD * nmft
+    #             mft_pixelscale_lamD = next_pixelscale
+    #             nmft = 128
+    #             nlamD = mft_pixelscale_lamD * nmft
 
-                x_fp = ( xp.linspace(-nmft/2, nmft/2-1, nmft) + 1/2 ) * mft_pixelscale_lamD
-                fpx, fpy = xp.meshgrid(x_fp, x_fp)
-                focal_grid = xp.array([xp.sqrt(fpx**2 + fpy**2), xp.arctan2(fpy,fpx)])
+    #             x_fp = ( xp.linspace(-nmft/2, nmft/2-1, nmft) + 1/2 ) * mft_pixelscale_lamD
+    #             fpx, fpy = xp.meshgrid(x_fp, x_fp)
+    #             focal_grid = xp.array([xp.sqrt(fpx**2 + fpy**2), xp.arctan2(fpy,fpx)])
 
-                vortex = make_vortex_phase_mask(focal_grid, charge=6, )
+    #             vortex = make_vortex_phase_mask(focal_grid, charge=6, )
 
-                wx = xp.array(windows.tukey(window_size, 1, False))
-                wy = xp.array(windows.tukey(window_size, 1, False))
-                w = xp.outer(wy, wx)
-                w = xp.pad(w, (focal_grid[0].shape[0] - w.shape[0]) // 2, 'constant')
-                vortex *= 1 - w
+    #             wx = xp.array(windows.tukey(window_size, 1, False))
+    #             wy = xp.array(windows.tukey(window_size, 1, False))
+    #             w = xp.outer(wy, wx)
+    #             w = xp.pad(w, (focal_grid[0].shape[0] - w.shape[0]) // 2, 'constant')
+    #             vortex *= 1 - w
 
-                # take the MFT of the pupil_wavefront
-                mft(pupil_wavefront, nlamD, nmft, forward=True, centering='ADJUSTABLE')
+    #             # take the MFT of the pupil_wavefront
+    #             mft(pupil_wavefront, nlamD, nmft, forward=True, centering='ADJUSTABLE')
 
-                # apply the windowed vortex
+    #             # apply the windowed vortex
 
-                # take the inverse MFT to go back to the pupil plane
+    #             # take the inverse MFT to go back to the pupil plane
 
-                # adjust the pixelscale for the next iteration of propagation
-                next_pixelscale = mft_pixelscale_lamD/self.N # for the next propagation iteration
+    #             # adjust the pixelscale for the next iteration of propagation
+    #             next_pixelscale = mft_pixelscale_lamD/self.N # for the next propagation iteration
 
-                # add the new pupil wavefront to the total pupil wavefront
-                # E_LS += E_pup
+    #             # add the new pupil wavefront to the total pupil wavefront
+    #             # E_LS += E_pup
             
-        return
+    #     return
 
     def propagate(self, return_all=False):
-        self.init_grids()
         
         if return_all:
             wavefronts = []
         
-        WFE = xp.ones((self.N, self.N), dtype=xp.complex128) if self.WFE is None else self.WFE
-        FPM = xp.ones((self.N, self.N), dtype=xp.complex128) if self.FPM is None else self.FPM
-        LYOT = xp.ones((self.N, self.N), dtype=xp.complex128) if self.LYOT is None else self.LYOT
+        if self.WFE is None: 
+            WFE = xp.ones((self.N, self.N), dtype=xp.complex128)
+        else:
+            WFE = utils.pad_or_crop(self.WFE, self.N)
 
-        self.wavefront = xp.ones((self.N,self.N), dtype=xp.complex128)
-        self.wavefront *= self.PUPIL # apply the pupil
+        FPM = xp.ones((self.N, self.N), dtype=xp.complex128) if self.FPM is None else self.FPM
+
+        self.wavefront = utils.pad_or_crop(self.APERTURE, self.N).astype(xp.complex128) # apply the pupil
         if return_all: wavefronts.append(copy.copy(self.wavefront))
         
         self.wavefront *= WFE # apply WFE data
@@ -396,7 +396,7 @@ class SCOOB():
         
         self.wavefront = self.apply_dm(self.wavefront)# apply the DM
         if return_all: wavefronts.append(copy.copy(self.wavefront))
-            
+
         if self.FPM is not None: 
             self.wavefront = fft(self.wavefront)
             if return_all: wavefronts.append(copy.copy(self.wavefront))
@@ -405,9 +405,15 @@ class SCOOB():
             self.wavefront = ifft(self.wavefront)
             if return_all: wavefronts.append(copy.copy(self.wavefront))
 
-        self.wavefront *= LYOT # apply the Lyot stop
+        self.wavefront *= utils.pad_or_crop(self.LYOT, self.N).astype(xp.complex128) # apply the Lyot stop
         if return_all: wavefronts.append(copy.copy(self.wavefront))
         
+        if self.use_llowfsc:
+            
+            # Mx,My = ...
+            # llowfsc_im = 
+            return llowfsc_im
+
         if self.FIELDSTOP is not None:
             self.wavefront = fft(self.wavefront)
             if return_all: wavefronts.append(copy.copy(self.wavefront))
