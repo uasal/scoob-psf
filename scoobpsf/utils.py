@@ -5,8 +5,11 @@ import scipy
 from astropy.io import fits
 import pickle
 
-def make_grid(npix, pixelscale=1):
-    y,x = (xp.indices((npix, npix)) - npix//2 + 1/2)*pixelscale
+def make_grid(npix, pixelscale=1, half_shift=False):
+    if half_shift:
+        y,x = (xp.indices((npix, npix)) - npix//2 + 1/2)*pixelscale
+    else:
+        y,x = (xp.indices((npix, npix)) - npix//2)*pixelscale
     return x,y
 
 def pad_or_crop( arr_in, npix ):

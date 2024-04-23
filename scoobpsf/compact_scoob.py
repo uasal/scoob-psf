@@ -191,6 +191,43 @@ def mft(plane, nlamD, npix, offset=None, inverse=False, centering='FFTSTYLE'):
     norm_coeff = np.sqrt((nlamDY * nlamDX) / (npupY * npupX * npixY * npixX))
     return norm_coeff * t2
 
+def get_scaled_coords(N, scale, center=True, shift=True):
+    if center:
+        cen = (N-1)/2.0
+    else:
+        cen = 0
+        
+    if shift:
+        shiftfunc = xp.fft.fftshift
+    else:
+        shiftfunc = lambda x: x
+    cy, cx = (shiftfunc(xp.indices((N,N))) - cen) * scale
+    r = xp.sqrt(cy**2 + cx**2)
+    return [cy, cx, r]
+
+def get_fresnel_TF(dz, N, wavelength, fnum):
+    '''
+    Get the Fresnel transfer function for a shift dz from focus
+    '''
+    df = 1.0 / (N * wavelength * fnum)
+    rp = get_scaled_coords(N,df, shift=False)[-1]
+    return xp.exp(-1j*np.pi*dz*wavelength*(rp**2))
+
+def mft_forward(pupil, psf_pixelscale_lamD, npsf):
+    npix = pupil.shape[0]
+    dx = 1.0 / npix
+    Xs = (xp.arange(npix, dtype=float) - (npix / 2)) * dx
+
+    du = psf_pixelscale_lamD
+    Us = (xp.arange(npsf, dtype=float) - npsf / 2) * du
+
+    xu = xp.outer(Us, Xs)
+    vy = xp.outer(Xs, Us)
+
+    My = xp.exp(-1j*2*np.pi*vy) 
+    Mx = xp.exp(-1j*2*np.pi*xu) 
+
+    return Mx@pupil@My
 
 class SCOOB():
 
@@ -227,7 +264,7 @@ class SCOOB():
         self.dm_pupil_diam = 9.2*u.mm
         self.dm_fill_factor = (self.dm_pupil_diam/self.dm_diam).decompose().value
 
-        self.lyot_stop_diam = 8.7*u.mm
+        self.lyot_stop_diam = 8.6*u.mm
         self.lyot_pupil_diam = 9.6*u.mm
 
         self.lyot_stop_ratio = (self.lyot_stop_diam/self.lyot_pupil_diam).decompose().value
@@ -251,8 +288,10 @@ class SCOOB():
         self.reverse_parity = True
 
         self.use_llowfsc = False
+        self.llowfsc_pixelscale = 3.76*u.um/u.pix
         self.llowfsc_defocus = 0.9*u.mm
         self.llowfsc_fl = 100*u.mm
+        self.nllowfsc = 64
         
     def getattr(self, attr):
         return getattr(self, attr)
@@ -310,11 +349,12 @@ class SCOOB():
         self.pupil_pixelscale = self.pupil_diam.to_value(u.m) / self.npix
         
         if which=='pupil':
-            x, y = utils.make_grid(self.npix, self.pupil_pixelscale)
+            x, y = utils.make_grid(self.npix, self.pupil_pixelscale, half_shift=True)
         elif which=='fpm' or which=='focal':
-            x,y = utils.make_grid(self.N, 1/self.oversample)
+            # x,y = utils.make_grid(self.N, 1/self.oversample, half_shift=False)
+            y,x = (xp.indices((self.N, self.N)) - self.N//2 - 1/2)/self.oversample
         elif which=='image' or which=='im':
-            x,y = utils.make_grid(self.Npsf, self.psf_pixelscale_lamD)
+            x,y = utils.make_grid(self.Npsf, self.psf_pixelscale_lamD, half_shift=False)
 
         if polar:
             r = xp.sqrt(x**2 + y**2)
@@ -409,10 +449,21 @@ class SCOOB():
         if return_all: wavefronts.append(copy.copy(self.wavefront))
         
         if self.use_llowfsc:
-            
-            # Mx,My = ...
-            # llowfsc_im = 
-            return llowfsc_im
+            fnum = self.llowfsc_fl.to_value(u.mm)/self.lyot_stop_diam.to_value(u.mm)
+            tf = get_fresnel_TF(self.llowfsc_defocus.to_value(u.m) * self.oversample**2, 
+                                self.N, 
+                                self.wavelength.to_value(u.m), 
+                                fnum)
+            um_per_lamD = (self.wavelength * self.llowfsc_fl/self.lyot_stop_diam).to(u.um)
+            psf_pixelscale_lamD = (self.llowfsc_pixelscale.to(u.um/u.pix)/um_per_lamD).value
+            self.wavefront = mft_forward(tf*self.wavefront, 
+                                         psf_pixelscale_lamD*self.oversample, 
+                                         self.nllowfsc)
+            if return_all: 
+                wavefronts.append(copy.copy(self.wavefront))
+                return wavefronts
+            else:
+                return self.wavefront
 
         if self.FIELDSTOP is not None:
             self.wavefront = fft(self.wavefront)
@@ -423,8 +474,9 @@ class SCOOB():
             if return_all: wavefronts.append(copy.copy(self.wavefront))
 
         # propagate to image plane with MFT
-        self.nlamD = self.npsf * self.psf_pixelscale_lamD * self.oversample
-        self.wavefront = mft(self.wavefront, self.nlamD, self.npsf)
+        self.wavefront = mft_forward(utils.pad_or_crop(self.wavefront, self.npix), 
+                                     self.psf_pixelscale_lamD, 
+                                     self.npsf)
         
         if self.Imax_ref is not None:
             self.wavefront /= xp.sqrt(self.Imax_ref)
