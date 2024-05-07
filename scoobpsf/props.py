@@ -165,7 +165,6 @@ def apply_vortex(pupil_wf, npix, plot=False):
     fp_wf_low_res *= vortex_mask * low_res_window # apply FPM
     pupil_wf_low_res = xp.fft.fftshift(xp.fft.ifft2(xp.fft.ifftshift(fp_wf_low_res))) # to Lyot Pupil
 
-    # return pupil_wf_low_res
     # high res FPM second
     high_res_sampling = 0.025 # lam/D per pixel
     Nmft = int(np.round(30/high_res_sampling))
