@@ -292,6 +292,7 @@ class SCOOB():
         self.llowfsc_defocus = 0.9*u.mm
         self.llowfsc_fl = 100*u.mm
         self.nllowfsc = 64
+        self.llowfsc_oversamp = 4 # required to capture the diffracted energy on the relective lyot stop
         
     def getattr(self, attr):
         return getattr(self, attr)
@@ -449,15 +450,17 @@ class SCOOB():
         if return_all: wavefronts.append(copy.copy(self.wavefront))
         
         if self.use_llowfsc:
+            Nllowfsc = int(self.npix * self.llowfsc_oversamp)
+            self.wavefront = utils.pad_or_crop(self.wavefront, Nllowfsc)
             fnum = self.llowfsc_fl.to_value(u.mm)/self.lyot_stop_diam.to_value(u.mm)
-            tf = get_fresnel_TF(self.llowfsc_defocus.to_value(u.m) * self.oversample**2, 
-                                self.N, 
+            tf = get_fresnel_TF(self.llowfsc_defocus.to_value(u.m) * self.llowfsc_oversamp**2, 
+                                Nllowfsc, 
                                 self.wavelength.to_value(u.m), 
                                 fnum)
             um_per_lamD = (self.wavelength * self.llowfsc_fl/self.lyot_stop_diam).to(u.um)
             psf_pixelscale_lamD = (self.llowfsc_pixelscale.to(u.um/u.pix)/um_per_lamD).value
             self.wavefront = mft_forward(tf*self.wavefront, 
-                                         psf_pixelscale_lamD*self.oversample, 
+                                         psf_pixelscale_lamD*self.llowfsc_oversamp, 
                                          self.nllowfsc)
             if return_all: 
                 wavefronts.append(copy.copy(self.wavefront))

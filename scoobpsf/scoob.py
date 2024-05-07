@@ -346,7 +346,8 @@ class SCOOBM():
         fosys.add_optic(LYOT)
         if self.use_llowfsc:
             llowfsc_lens = poppy.QuadraticLens(self.fl_llowfsc_lens, name='Lens')
-            fosys.add_optic(llowfsc_lens, distance=self.fl_llowfsc_lens)
+            fosys.add_optic(llowfsc_lens, distance=25*u.mm)
+            # fosys.add_optic(llowfsc_lens, distance=self.fl_llowfsc_lens)
             fosys.add_optic(poppy.Detector(pixelscale=self.llowfsc_pixelscale, fov_pixels=self.nllowfsc, interp_order=3, name='LLOWFSC Detector'),
                             distance=self.fl_llowfsc_lens + self.llowfsc_defocus)
             return fosys
