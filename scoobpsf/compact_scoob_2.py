@@ -51,6 +51,7 @@ class CORO():
                  Imax_ref=1,
                  use_scc=False, 
                  use_llowfsc=False, 
+                 use_fieldstop=False, 
                  ):
         
         self.wavelength_c = 633e-9*u.m
@@ -66,6 +67,7 @@ class CORO():
         self.use_fpm = False
         self.use_scc = use_scc
         self.use_llowfsc = use_llowfsc
+        self.use_fieldstop = use_fieldstop
 
         self.npix = 1000
         self.oversample = 2.048
@@ -98,6 +100,13 @@ class CORO():
             self.llowfsc_defocus = 1.75*u.mm
             self.llowfsc_fl = 200*u.mm
             self.nllowfsc = 64
+
+        if self.use_fieldstop:
+            fp_pixelscale = 1/self.oversample
+            x = xp.linspace(-self.N//2, self.N//2-1, self.N) * fp_pixelscale * self.lyot_ratio
+            x,y = xp.meshgrid(x,x)
+            r = xp.sqrt(x**2 + y**2)
+            self.FIELDSTOP = r<=10
             
         self.WFE = xp.ones((self.npix,self.npix), dtype=complex)
 
@@ -214,6 +223,14 @@ class CORO():
                 return wfs
             else:
                 return self.wf
+
+        if self.use_fieldstop:
+
+            self.wf = xp.fft.ifftshift(xp.fft.fft2(xp.fft.fftshift(self.wf)))
+            self.wf *= self.FIELDSTOP
+            if save_wfs: wfs.append(copy.copy(self.wf))
+            self.wf = xp.fft.fftshift(xp.fft.ifft2(xp.fft.ifftshift(self.wf)))
+            if save_wfs: wfs.append(copy.copy(self.wf))
 
         self.wf = props.mft_forward(self.wf, self.psf_pixelscale_lamD * self.oversample / self.lyot_ratio, self.npsf)
         self.wf /= xp.sqrt(self.Imax_ref) # normalize by a reference maximum value
