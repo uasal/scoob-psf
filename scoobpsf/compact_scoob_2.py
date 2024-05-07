@@ -17,6 +17,28 @@ import copy
 import scoobpsf
 module_path = Path(os.path.dirname(os.path.abspath(scoobpsf.__file__)))
 
+def get_scaled_coords(N, scale, center=True, shift=True):
+    if center:
+        cen = (N-1)/2.0
+    else:
+        cen = 0
+        
+    if shift:
+        shiftfunc = xp.fft.fftshift
+    else:
+        shiftfunc = lambda x: x
+    cy, cx = (shiftfunc(xp.indices((N,N))) - cen) * scale
+    r = xp.sqrt(cy**2 + cx**2)
+    return [cy, cx, r]
+
+def get_fresnel_TF(dz, N, wavelength, fnum):
+    '''
+    Get the Fresnel transfer function for a shift dz from focus
+    '''
+    df = 1.0 / (N * wavelength * fnum)
+    rp = get_scaled_coords(N,df, shift=False)[-1]
+    return xp.exp(-1j*np.pi*dz*wavelength*(rp**2))
+
 class CORO():
 
     def __init__(self, 
@@ -28,6 +50,7 @@ class CORO():
                  dm_inf=None, # defaults to inf.fits
                  Imax_ref=1,
                  use_scc=False, 
+                 use_llowfsc=False, 
                  ):
         
         self.wavelength_c = 633e-9*u.m
@@ -40,29 +63,41 @@ class CORO():
 
         self.wavelength = self.wavelength_c if wavelength is None else wavelength
         
-        self.npix = 500
-        self.oversample = 4.096
+        self.use_fpm = False
+        self.use_scc = use_scc
+        self.use_llowfsc = use_llowfsc
+
         self.npix = 1000
-        self.oversample = 2.5
+        self.oversample = 2.048
+        if self.use_scc:
+            self.oversample = 2.5
+        if self.use_llowfsc:
+            self.oversample = 4.096
         self.N = int(self.npix*self.oversample)
         self.Nfpm = 4096
 
         self.imaging_fl = 300*u.mm
 
-        self.use_fpm = False
-        self.use_scc = use_scc
-
-        pwf = poppy.FresnelWavefront(beam_radius=self.pupil_diam/2, npix=self.npix, oversample=1)
+        pwf = poppy.FresnelWavefront(beam_radius=self.pupil_diam/2, npix=self.npix, oversample=1) # pupil wavefront
         self.APERTURE = poppy.CircularAperture(radius=self.pupil_diam/2).get_transmission(pwf)
         self.APMASK = self.APERTURE>0
+        self.LYOT = poppy.CircularAperture(radius=self.lyot_ratio*self.pupil_diam/2).get_transmission(pwf)
+
         if self.use_scc:
-            lwf = poppy.FresnelWavefront(beam_radius=self.pupil_diam/2, npix=self.npix, oversample=self.oversample)
-            lyot = poppy.CircularAperture(radius=self.lyot_ratio*self.pupil_diam/2).get_transmission(lwf)
-            scc_pinhole = poppy.CircularAperture(radius=0.03*self.lyot_ratio*self.pupil_diam/2, 
-                                                 shift_x=1.55/np.sqrt(2)*self.pupil_diam, shift_y=1.55/np.sqrt(2)*self.pupil_diam).get_transmission(lwf)
+            lwf = poppy.FresnelWavefront(beam_radius=self.lyot_pupil_diam/2, npix=self.npix, oversample=self.oversample)
+            lyot = poppy.CircularAperture(radius=self.lyot_diam/2).get_transmission(lwf)
+            scc_pinhole = poppy.CircularAperture(radius=0.03*self.lyot_diam/2, 
+                                                 shift_x=1.55/np.sqrt(2)*self.lyot_diam, shift_y=1.55/np.sqrt(2)*self.lyot_diam).get_transmission(lwf)
             self.LYOT = lyot + scc_pinhole
-        else:
-            self.LYOT = poppy.CircularAperture(radius=self.lyot_ratio*self.pupil_diam/2).get_transmission(pwf)
+
+        if self.use_llowfsc:
+            lwf = poppy.FresnelWavefront(beam_radius=self.lyot_pupil_diam/2, npix=self.npix, oversample=self.oversample)
+            self.LYOT = 1 - utils.pad_or_crop(self.LYOT, self.N)
+            self.LYOT *= poppy.CircularAperture(radius=25.4*u.mm/2).get_transmission(lwf)
+            self.llowfsc_pixelscale = 3.76*u.um/u.pix
+            self.llowfsc_defocus = 1.75*u.mm
+            self.llowfsc_fl = 200*u.mm
+            self.nllowfsc = 64
             
         self.WFE = xp.ones((self.npix,self.npix), dtype=complex)
 
@@ -165,8 +200,21 @@ class CORO():
         if self.reverse_parity: self.wf = xp.rot90(xp.rot90(self.wf))
         if save_wfs: wfs.append(copy.copy(self.wf))
 
-        # Nlyot = int(np.round(self.lyot_ratio * self.npix))
-        # self.wf = props.mft_forward(utils.pad_or_crop(self.wf, Nlyot), self.psf_pixelscale_lamD, self.npsf)
+        if self.use_llowfsc: 
+            fnum = self.llowfsc_fl.to_value(u.mm)/self.lyot_diam.to_value(u.mm)
+            tf = get_fresnel_TF(self.llowfsc_defocus.to_value(u.m) * self.oversample**2, 
+                                self.N, 
+                                self.wavelength.to_value(u.m), 
+                                fnum)
+            um_per_lamD = (self.wavelength * self.llowfsc_fl/self.lyot_diam).to(u.um)
+            psf_pixelscale_lamD = (self.llowfsc_pixelscale.to(u.um/u.pix)/um_per_lamD).value
+            self.wf = props. mft_forward(tf*self.wf, psf_pixelscale_lamD*self.oversample, self.nllowfsc)
+            if save_wfs: wfs.append(copy.copy(self.wf))
+            if save_wfs:
+                return wfs
+            else:
+                return self.wf
+
         self.wf = props.mft_forward(self.wf, self.psf_pixelscale_lamD * self.oversample / self.lyot_ratio, self.npsf)
         self.wf /= xp.sqrt(self.Imax_ref) # normalize by a reference maximum value
         if save_wfs: wfs.append(copy.copy(self.wf))
