@@ -127,6 +127,28 @@ def mft_reverse(fpwf, psf_pixelscale_lamD, npix):
 
     return Mx@fpwf@My * norm_coeff
 
+def get_scaled_coords(N, scale, center=True, shift=True):
+    if center:
+        cen = (N-1)/2.0
+    else:
+        cen = 0
+        
+    if shift:
+        shiftfunc = xp.fft.fftshift
+    else:
+        shiftfunc = lambda x: x
+    cy, cx = (shiftfunc(xp.indices((N,N))) - cen) * scale
+    r = xp.sqrt(cy**2 + cx**2)
+    return [cy, cx, r]
+
+def get_fresnel_TF(dz, N, wavelength, fnum):
+    '''
+    Get the Fresnel transfer function for a shift dz from focus
+    '''
+    df = 1.0 / (N * wavelength * fnum)
+    rp = get_scaled_coords(N,df, shift=False)[-1]
+    return xp.exp(-1j*np.pi*dz*wavelength*(rp**2))
+
 def make_vortex_phase_mask(npix, charge=6, 
                            grid='odd', 
                            singularity=None, 

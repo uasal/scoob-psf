@@ -17,28 +17,6 @@ import copy
 import scoobpsf
 module_path = Path(os.path.dirname(os.path.abspath(scoobpsf.__file__)))
 
-def get_scaled_coords(N, scale, center=True, shift=True):
-    if center:
-        cen = (N-1)/2.0
-    else:
-        cen = 0
-        
-    if shift:
-        shiftfunc = xp.fft.fftshift
-    else:
-        shiftfunc = lambda x: x
-    cy, cx = (shiftfunc(xp.indices((N,N))) - cen) * scale
-    r = xp.sqrt(cy**2 + cx**2)
-    return [cy, cx, r]
-
-def get_fresnel_TF(dz, N, wavelength, fnum):
-    '''
-    Get the Fresnel transfer function for a shift dz from focus
-    '''
-    df = 1.0 / (N * wavelength * fnum)
-    rp = get_scaled_coords(N,df, shift=False)[-1]
-    return xp.exp(-1j*np.pi*dz*wavelength*(rp**2))
-
 class CORO():
 
     def __init__(self, 
@@ -211,10 +189,8 @@ class CORO():
 
         if self.use_llowfsc: 
             fnum = self.llowfsc_fl.to_value(u.mm)/self.lyot_diam.to_value(u.mm)
-            tf = get_fresnel_TF(self.llowfsc_defocus.to_value(u.m) * self.oversample**2, 
-                                self.N, 
-                                self.wavelength.to_value(u.m), 
-                                fnum)
+            tf = props.get_fresnel_TF(self.llowfsc_defocus.to_value(u.m) * self.oversample**2, 
+                                      self.N, self.wavelength.to_value(u.m), fnum)
             um_per_lamD = (self.wavelength * self.llowfsc_fl/self.lyot_diam).to(u.um)
             psf_pixelscale_lamD = (self.llowfsc_pixelscale.to(u.um/u.pix)/um_per_lamD).value
             self.wf = props. mft_forward(tf*self.wf, psf_pixelscale_lamD*self.oversample, self.nllowfsc)
