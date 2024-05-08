@@ -47,6 +47,8 @@ class CORO():
         self.use_llowfsc = use_llowfsc
         self.use_fieldstop = use_fieldstop
 
+        self.return_pupil = False
+        
         self.npix = 1000
         self.oversample = 2.048
         if self.use_scc:
@@ -177,10 +179,12 @@ class CORO():
         self.wf *= xp.exp(1j*4*np.pi*dm_surf/self.wavelength.to_value(u.m))
         if save_wfs: wfs.append(copy.copy(self.wf))
 
+        if self.return_pupil:
+            return self.wf
+
         if self.use_fpm:
             self.wf = props.apply_vortex(utils.pad_or_crop(self.wf, self.Nfpm), npix=self.npix)
             self.wf = utils.pad_or_crop(self.wf, self.N)
-            # self.wf = props.apply_vortex(utils.pad_or_crop(self.wf, self.npix), Nfpm=self.Nfpm, N=self.N, plot=False)
         if save_wfs: wfs.append(copy.copy(self.wf))
 
         self.wf *= utils.pad_or_crop(self.LYOT, self.N).astype(complex)
