@@ -252,57 +252,8 @@ class SCOOBI():
         
         return im
     
-    def snap_many(self, quiet=True, plot=False, sat_thresh=100):
-        if self.EMCCD is None:
-            raise ValueError('ERROR: must have EMCCD object to use this functionality.')
-        if self.exp_times_list is None:
-            raise ValueError('ERROR: must specify a list of exposure times to stack frames with variable exposures.')
+    # def snap_llowfsc(self):
 
-        # ims = []
-        # im_masks = []
-        total_flux = 0.0
-        pixel_weights = 0.0
-        for i in range(len(self.exp_times_list)):
-            self.exp_time = copy.copy(self.exp_times_list[i])
-            if self.Nframes_list is not None:
-                self.Nims = self.Nframes_list[i]
-
-            averaged_frame = 0.0
-            for j in range(self.Nims):
-                frame = self.cam.grab_latest()
-                if plot: imshows.imshow1(frame, f'Individual frame with\nexposure time {self.exp_time:.3f}', lognorm=True)
-                averaged_frame += frame
-            averaged_frame = xp.array(averaged_frame)/self.Nims
-            pixel_sat_mask = averaged_frame>2**self.nbits - sat_thresh
-            if self.subtract_bias:
-                averaged_frame -= self.bias
-
-            if plot:
-                print('Obtaining averaged frame.')
-                imshows.imshow2(averaged_frame, pixel_sat_mask, 
-                                f'Averaged Frame:\nExposure Time = {self.exp_times_list[i]}s\nN-frames = {self.Nims:d}',
-                                'Pixel Saturation Mask', 
-                                lognorm1=True)
-            # ims.append(copy.copy(averaged_frame))
-            # im_masks.append(copy.copy(pixel_sat_mask))
-
-            flux_frame = copy.copy(averaged_frame)/self.exp_times_list
-            flux_frame[pixel_sat_mask] = 0
-            pixel_weights += ~pixel_sat_mask
-            total_flux += flux_frame
-            
-        total_flux_frame = total_flux/pixel_weights
-
-        total_flux_frame = _scipy.ndimage.shift(total_flux_frame, (self.y_shift, self.x_shift), order=0)
-        total_flux_frame = pad_or_crop(total_flux_frame, self.npsf)
-
-        if self.Imax_ref is not None and self.em_gain_ref is not None: # normalize by EM gain
-            self.norm_factor = 1/self.Imax_ref * self.gain_ref/self.gain
-        else:
-            self.norm_factor = 1
-
-        return total_flux_frame*self.norm_factor
-    
     
         
         
