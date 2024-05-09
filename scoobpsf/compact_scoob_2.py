@@ -27,9 +27,9 @@ class CORO():
                  dm_ref=np.zeros((34,34)),
                  dm_inf=None, # defaults to inf.fits
                  Imax_ref=1,
-                 use_scc=False, 
-                 use_llowfsc=False, 
-                 use_fieldstop=False, 
+                 use_fieldstop=False,
+                 scc_diam=None,
+                 scc_pinhole_position=None, 
                  ):
         
         self.wavelength_c = 633e-9*u.m
@@ -43,18 +43,23 @@ class CORO():
         self.wavelength = self.wavelength_c if wavelength is None else wavelength
         
         self.use_fpm = False
-        self.use_scc = use_scc
-        self.use_llowfsc = use_llowfsc
         self.use_fieldstop = use_fieldstop
 
         self.return_pupil = False
+
+        self.scc_diam = scc_diam
+        if scc_pinhole_position is None:
+            shift_x = 1.55/np.sqrt(2)*self.lyot_diam
+            shift_y = 1.55/np.sqrt(2)*self.lyot_diam
+        else:
+            shift_x = scc_pinhole_position[0]
+            shift_y = scc_pinhole_position[1]
+        self.scc_pinhole_position = [shift_x, shift_y]
+
+        self.llowfsc_mode = False
         
         self.npix = 1000
         self.oversample = 2.048
-        if self.use_scc:
-            self.oversample = 2.5
-        if self.use_llowfsc:
-            self.oversample = 4.096
         self.N = int(self.npix*self.oversample)
         self.Nfpm = 4096
 
@@ -64,22 +69,6 @@ class CORO():
         self.APERTURE = poppy.CircularAperture(radius=self.pupil_diam/2).get_transmission(pwf)
         self.APMASK = self.APERTURE>0
         self.LYOT = poppy.CircularAperture(radius=self.lyot_ratio*self.pupil_diam/2).get_transmission(pwf)
-
-        if self.use_scc:
-            lwf = poppy.FresnelWavefront(beam_radius=self.lyot_pupil_diam/2, npix=self.npix, oversample=self.oversample)
-            lyot = poppy.CircularAperture(radius=self.lyot_diam/2).get_transmission(lwf)
-            scc_pinhole = poppy.CircularAperture(radius=0.03*self.lyot_diam/2, 
-                                                 shift_x=1.55/np.sqrt(2)*self.lyot_diam, shift_y=1.55/np.sqrt(2)*self.lyot_diam).get_transmission(lwf)
-            self.LYOT = lyot + scc_pinhole
-
-        if self.use_llowfsc:
-            lwf = poppy.FresnelWavefront(beam_radius=self.lyot_pupil_diam/2, npix=self.npix, oversample=self.oversample)
-            self.LYOT = 1 - utils.pad_or_crop(self.LYOT, self.N)
-            self.LYOT *= poppy.CircularAperture(radius=25.4*u.mm/2).get_transmission(lwf)
-            self.llowfsc_pixelscale = 3.76*u.um/u.pix
-            self.llowfsc_defocus = 1.75*u.mm
-            self.llowfsc_fl = 200*u.mm
-            self.nllowfsc = 64
 
         if self.use_fieldstop:
             fp_pixelscale = 1/self.oversample
@@ -165,6 +154,57 @@ class CORO():
         command.ravel()[self.dm_mask.ravel()] = ensure_np_array(act_vector)
         return command
     
+    def use_scc(self, use=True):
+        if use: 
+            self.scc_mode = True
+            self.oversample = 2.5
+            self.N = int(self.npix*self.oversample)
+
+            lwf = poppy.FresnelWavefront(beam_radius=self.lyot_pupil_diam/2, npix=self.npix, oversample=self.oversample)
+            lyot = poppy.CircularAperture(radius=self.lyot_diam/2).get_transmission(lwf)
+            scc_pinhole = poppy.CircularAperture(radius=self.scc_diam/2, 
+                                                shift_x=self.scc_pinhole_position[0], 
+                                                shift_y=self.scc_pinhole_position[1]).get_transmission(lwf)
+            self.LYOT = lyot + scc_pinhole
+        else:
+            self.scc_mode = False
+            self.oversample = 2.048
+            self.N = int(self.npix*self.oversample)
+            pwf = poppy.FresnelWavefront(beam_radius=self.lyot_pupil_diam/2, npix=self.npix, oversample=1) # pupil wavefront
+            self.LYOT = poppy.CircularAperture(radius=self.lyot_diam/2).get_transmission(pwf)
+
+    def use_llowfsc(self, use=True):
+        if use:
+            self.llowfsc_mode = True
+            self.oversample = 4.096
+            self.N = int(self.npix*self.oversample)
+            lwf = poppy.FresnelWavefront(beam_radius=self.lyot_pupil_diam/2, npix=self.npix, oversample=self.oversample)
+            lyot = poppy.CircularAperture(radius=self.lyot_diam/2).get_transmission(lwf)
+            if self.scc_diam is not None:
+                scc_pinhole = poppy.CircularAperture(radius=self.scc_diam/2, 
+                                                    shift_x=self.scc_pinhole_position[0], 
+                                                    shift_y=self.scc_pinhole_position[1]).get_transmission(lwf)
+                lyot += scc_pinhole
+            self.LYOT = 1 - lyot
+            self.LYOT *= poppy.CircularAperture(radius=25.4*u.mm/2).get_transmission(lwf)
+        else:
+            self.llowfsc_mode = False
+            self.oversample = 2.5
+            self.N = int(self.npix*self.oversample)
+            lwf = poppy.FresnelWavefront(beam_radius=self.lyot_pupil_diam/2, npix=self.npix, oversample=self.oversample)
+            lyot = poppy.CircularAperture(radius=self.lyot_diam/2).get_transmission(lwf)
+            if self.scc_diam is not None:
+                scc_pinhole = poppy.CircularAperture(radius=self.scc_diam/2, 
+                                                    shift_x=self.scc_pinhole_position[0], 
+                                                    shift_y=self.scc_pinhole_position[1]).get_transmission(lwf)
+                lyot += scc_pinhole
+            self.LYOT = lyot
+
+        self.llowfsc_pixelscale = 3.76*u.um/u.pix
+        self.llowfsc_defocus = 1.75*u.mm
+        self.llowfsc_fl = 200*u.mm
+        self.nllowfsc = 64
+
     def calc_wfs(self, save_wfs=True, quiet=True): # method for getting the PSF in photons
         start = time.time()
         if not quiet: print('Propagating wavelength {:.3f}.'.format(self.wavelength.to(u.nm)))
@@ -191,7 +231,7 @@ class CORO():
         if self.reverse_parity: self.wf = xp.rot90(xp.rot90(self.wf))
         if save_wfs: wfs.append(copy.copy(self.wf))
 
-        if self.use_llowfsc: 
+        if self.llowfsc_mode: 
             fnum = self.llowfsc_fl.to_value(u.mm)/self.lyot_diam.to_value(u.mm)
             tf = props.get_fresnel_TF(self.llowfsc_defocus.to_value(u.m) * self.oversample**2, 
                                       self.N, self.wavelength.to_value(u.m), fnum)
@@ -205,7 +245,6 @@ class CORO():
                 return self.wf
 
         if self.use_fieldstop:
-
             self.wf = xp.fft.ifftshift(xp.fft.fft2(xp.fft.fftshift(self.wf)))
             self.wf *= self.FIELDSTOP
             if save_wfs: wfs.append(copy.copy(self.wf))
