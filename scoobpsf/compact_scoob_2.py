@@ -173,6 +173,28 @@ class CORO():
             pwf = poppy.FresnelWavefront(beam_radius=self.lyot_pupil_diam/2, npix=self.npix, oversample=1) # pupil wavefront
             self.LYOT = poppy.CircularAperture(radius=self.lyot_diam/2).get_transmission(pwf)
 
+    def block_lyot(self, val=True):
+        # only meant to be used if currently using an SCC as well
+        self.llowfsc_mode = False
+        if val:
+            self.oversample = 2.5
+            self.N = int(self.npix*self.oversample)
+            lwf = poppy.FresnelWavefront(beam_radius=self.lyot_pupil_diam/2, npix=self.npix, oversample=self.oversample)
+            scc_pinhole = poppy.CircularAperture(radius=self.scc_diam/2, 
+                                                 shift_x=self.scc_pinhole_position[0], 
+                                                 shift_y=self.scc_pinhole_position[1]).get_transmission(lwf)
+            self.LYOT = scc_pinhole
+        else:
+            self.oversample = 2.5
+            self.N = int(self.npix*self.oversample)
+            lwf = poppy.FresnelWavefront(beam_radius=self.lyot_pupil_diam/2, npix=self.npix, oversample=self.oversample)
+            lyot = poppy.CircularAperture(radius=self.lyot_diam/2).get_transmission(lwf)
+            scc_pinhole = poppy.CircularAperture(radius=self.scc_diam/2, 
+                                                 shift_x=self.scc_pinhole_position[0], 
+                                                 shift_y=self.scc_pinhole_position[1]).get_transmission(lwf)
+            lyot += scc_pinhole
+            self.LYOT = lyot
+
     def use_llowfsc(self, use=True):
         if use:
             self.llowfsc_mode = True
