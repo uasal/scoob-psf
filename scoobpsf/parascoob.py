@@ -1,5 +1,4 @@
 import numpy as np
-# import cupy as cp
 import astropy.units as u
 from astropy.io import fits
 import time
@@ -16,53 +15,28 @@ from . import imshows
 import scoobpsf
 module_path = Path(os.path.dirname(os.path.abspath(scoobpsf.__file__)))
 
-import poppy
-from poppy.poppy_core import PlaneType
-pupil = PlaneType.pupil
-inter = PlaneType.intermediate
-image = PlaneType.image
-
-
 class ParallelizedScoob():
     '''
     This is a class that sets up the parallelization of calc_psf such that it 
     we can generate polychromatic wavefronts that are then fed into the 
     various wavefront simulations.
     '''
-    def __init__(self, 
-                 actors,
-                 dm_ref=np.zeros((34,34)),
-                 use_noise=False,
-                 exp_time=None,
-                 Imax_ref=None,
-                 normalize=False):
+    def __init__(self, actors,):
         
         
         print('ParallelizedScoob Initialized!')
         self.actors = actors
-        self.Na = len(actors)
+        self.Nactors = len(actors)
 
         # FIXME: Parameters that are in the model but needed higher up
         self.npix = ray.get(actors[0].getattr.remote('npix'))
         self.oversample = ray.get(actors[0].getattr.remote('oversample'))
         
         self.psf_pixelscale_lamD = ray.get(actors[0].getattr.remote('psf_pixelscale_lamD'))
-        self.det_rotation = ray.get(actors[0].getattr.remote('det_rotation'))
         self.npsf = ray.get(actors[0].getattr.remote('npsf'))
-        
-        self.use_noise = use_noise
-        self.exp_time = exp_time
-        self.Imax_ref = Imax_ref
-        self.normalize = normalize
-        
-        self.Nact = 34
-        self.act_spacing = 300e-6*u.m
-        self.dm_active_diam = 10.2*u.mm
-        self.dm_full_diam = 11.1*u.mm
-        
+
         self.dm_mask = ray.get(actors[0].getattr.remote('dm_mask'))
-        self.dm_ref = dm_ref
-        self.set_dm(dm_ref)
+        self.dm_ref = ray.get(actors[0].getattr.remote('dm_ref'))
 
     def set_actor_attr(self, attr, value):
         '''
@@ -90,40 +64,27 @@ class ParallelizedScoob():
     
     def show_dm(self):
         imshows.imshow1(self.get_dm(), 'DM Command',)
-        
-    def calc_psfs(self, quiet=True):
-        start = time.time()
-        pending_psfs = []
-        for i in range(self.Na):
-            future_psfs = self.actors[i].calc_psf.remote()
-            pending_psfs.append(future_psfs)
-        psfs = ray.get(pending_psfs)
-        if isinstance(psfs[0], np.ndarray):
-            xp = np
-        elif isinstance(psfs[0], cp.ndarray):
-            xp = cp
-        psfs = xp.array(psfs)
-        
-        if not quiet: print('PSFs calculated in {:.3f}s.'.format(time.time()-start))
-        return psfs  
     
+    def use_scc(self, use=True):
+        for i in range(len(self.actors)):
+            self.actors[i].use_scc.remote(use)
+
+    def use_llowfsc(self, use=True):
+        for i in range(len(self.actors)):
+            self.actors[i].use_llowfsc.remote(use)
+
+    def block_lyot(self, val=True):
+        for i in range(len(self.actors)):
+            self.actors[i].block_lyot.remote(val)
+
     def snap(self):
         pending_ims = []
-        for i in range(self.Na):
+        for i in range(self.Nactors):
             future_ims = self.actors[i].snap.remote()
             pending_ims.append(future_ims)
         ims = ray.get(pending_ims)
         ims = xp.array(ims)
-        im = xp.sum(ims, axis=0)/self.Na
-        
-        if self.normalize:
-            if self.Imax_ref is not None:
-                im /= self.Imax_ref
-                
-            if self.exp_time is not None and self.exp_time_ref is not None:
-                im /= (self.exp_time/self.exp_time_ref).value
-            
-            
+        im = xp.sum(ims, axis=0)/self.Nactors
         return im
         
         

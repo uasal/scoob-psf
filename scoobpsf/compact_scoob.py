@@ -57,6 +57,10 @@ class CORO():
         self.scc_pinhole_position = [shift_x, shift_y]
 
         self.llowfsc_mode = False
+        self.llowfsc_pixelscale = 3.76*u.um/u.pix
+        self.llowfsc_defocus = 1.75*u.mm
+        self.llowfsc_fl = 200*u.mm
+        self.nllowfsc = 64
         
         self.npix = 1000
         self.oversample = 2.048
@@ -79,7 +83,7 @@ class CORO():
             
         self.WFE = xp.ones((self.npix,self.npix), dtype=complex)
 
-        self.um_per_lamD = (self.wavelength_c*self.imaging_fl/(self.lyot_diam)).to(u.um)
+        self.um_per_lamD = (self.wavelength*self.imaging_fl/(self.lyot_diam)).to(u.um)
 
         self.npsf = npsf
         if psf_pixelscale_lamD is None: # overrides psf_pixelscale this way
@@ -99,6 +103,9 @@ class CORO():
     def getattr(self, attr):
         return getattr(self, attr)
     
+    def setattr(self, attr, val):
+        setattr(self, attr, val)
+
     @property
     def psf_pixelscale(self):
         return self._psf_pixelscale
@@ -221,11 +228,6 @@ class CORO():
                                                     shift_y=self.scc_pinhole_position[1]).get_transmission(lwf)
                 lyot += scc_pinhole
             self.LYOT = lyot
-
-        self.llowfsc_pixelscale = 3.76*u.um/u.pix
-        self.llowfsc_defocus = 1.75*u.mm
-        self.llowfsc_fl = 200*u.mm
-        self.nllowfsc = 64
 
     def calc_wfs(self, save_wfs=True, quiet=True): # method for getting the PSF in photons
         start = time.time()
