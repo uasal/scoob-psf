@@ -21,23 +21,31 @@ class ParallelizedScoob():
     we can generate polychromatic wavefronts that are then fed into the 
     various wavefront simulations.
     '''
-    def __init__(self, actors,):
+    def __init__(self, 
+                 actors,
+                 ):
         
-        
-        print('ParallelizedScoob Initialized!')
         self.actors = actors
         self.Nactors = len(actors)
+        self.wavelength_c = self.getattr('wavelength_c')
 
-        # FIXME: Parameters that are in the model but needed higher up
         self.npix = ray.get(actors[0].getattr.remote('npix'))
         self.oversample = ray.get(actors[0].getattr.remote('oversample'))
         
         self.psf_pixelscale_lamD = ray.get(actors[0].getattr.remote('psf_pixelscale_lamD'))
         self.npsf = ray.get(actors[0].getattr.remote('npsf'))
 
+        self.llowfsc_mode = ray.get(self.actors[0].getattr.remote('llowfsc_mode'))
+        self.nllowfsc = ray.get(actors[0].getattr.remote('nllowfsc'))
+        self.llowfsc_pixelscale = ray.get(actors[0].getattr.remote('llowfsc_pixelscale'))
+
         self.dm_mask = ray.get(actors[0].getattr.remote('dm_mask'))
+        self.Nact = self.dm_mask.shape[0]
         self.dm_ref = ray.get(actors[0].getattr.remote('dm_ref'))
 
+    def getattr(self, attr):
+        return ray.get(self.actors[0].getattr.remote(attr))
+    
     def set_actor_attr(self, attr, value):
         '''
         Sets a value for all actors
@@ -62,9 +70,6 @@ class ParallelizedScoob():
     def get_dm(self):
         return ray.get(self.actors[0].get_dm.remote())
     
-    def show_dm(self):
-        imshows.imshow1(self.get_dm(), 'DM Command',)
-    
     def use_scc(self, use=True):
         for i in range(len(self.actors)):
             self.actors[i].use_scc.remote(use)
@@ -72,6 +77,7 @@ class ParallelizedScoob():
     def use_llowfsc(self, use=True):
         for i in range(len(self.actors)):
             self.actors[i].use_llowfsc.remote(use)
+        self.llowfsc_mode = ray.get(self.actors[0].getattr.remote('llowfsc_mode'))
 
     def block_lyot(self, val=True):
         for i in range(len(self.actors)):
@@ -85,6 +91,7 @@ class ParallelizedScoob():
         ims = ray.get(pending_ims)
         ims = xp.array(ims)
         im = xp.sum(ims, axis=0)/self.Nactors
+
         return im
         
         
