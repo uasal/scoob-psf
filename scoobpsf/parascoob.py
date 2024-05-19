@@ -90,7 +90,7 @@ class ParallelizedScoob():
             pending_ims.append(future_ims)
         ims = ray.get(pending_ims)
         ims = xp.array(ims)
-        im = xp.sum(ims, axis=0)/self.Nactors
+        im = xp.sum(ims, axis=0)
 
         return im
         
