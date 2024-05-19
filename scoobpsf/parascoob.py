@@ -43,6 +43,15 @@ class ParallelizedScoob():
         self.Nact = self.dm_mask.shape[0]
         self.dm_ref = ray.get(actors[0].getattr.remote('dm_ref'))
 
+        self.use_noise = False
+        self.optical_throughput = 0.5
+        self.qe = 0.5
+        self.read_noise = 1.5
+        self.bias = 10
+        self.gain = 5
+        self.nbits = 16
+        self.sat_thresh = 2**self.nbits - 1
+
     def getattr(self, attr):
         return ray.get(self.actors[0].getattr.remote(attr))
     
@@ -83,6 +92,16 @@ class ParallelizedScoob():
         for i in range(len(self.actors)):
             self.actors[i].block_lyot.remote(val)
 
+    def add_noise(self, flux_image):
+        # flux_image is provided as an array in units of photons/sec/pixel
+        counts = flux_image * self.exp_time * self.optical_throughput * self.qe
+        noisy_im = xp.random.poisson(counts) * self.gain
+        counts += self.bias
+        noisy_im += int(xp.round(xp.random.normal(self.read_noise)))
+
+        noisy_im[noisy_im>self.sat_thresh] = self.sat_thresh
+        return noisy_im
+
     def snap(self):
         pending_ims = []
         for i in range(self.Nactors):
@@ -92,7 +111,12 @@ class ParallelizedScoob():
         ims = xp.array(ims)
         im = xp.sum(ims, axis=0)
 
+        if self.use_noise:
+            im = self.add_noise(im)
+
         return im
+
+    
         
         
     

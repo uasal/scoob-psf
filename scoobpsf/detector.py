@@ -23,7 +23,7 @@ image = PlaneType.image
 
 class noisy_detector():
 
-    def __init__(self, npix, exposure_time):
+    def __init__(self, npix, exposure_time=1):
         
         # setup detector based on parameters
         self.quantum_efficiency = 0.9
@@ -38,32 +38,27 @@ class noisy_detector():
         # initialize 
         self.accumulated_charge = xp.zeros((self.npix, self.npix))
 
-    def integrate(self, flux, exposure_time=None):
-        if exposure_time is not None:
+    # def integrate(self, flux_image):
+    #     # add incoming wavefront flux
+    #     self.accumulated_charge += flux_image * self.exposure_time * self.quantum_efficiency
 
-            # add incoming wavefront flux
-            self.accumulated_charge += flux * exposure_time * self.quantum_efficiency
-
-            # add dark current               
-            self.accumulated_charge += self.dark_current * exposure_time * self.quantum_efficiency
-
-        elif self.exposure_time is not None:
-            # add incoming wavefront flux
-            self.accumulated_charge += flux * self.exposure_time * self.quantum_efficiency
-
-            # add dark current               
-            self.accumulated_charge += self.dark_current * self.exposure_time * self.quantum_efficiency
-        else:
-            print("Please provide the detector an exposure time!")
+    #     # add dark current               
+    #     self.accumulated_charge += self.dark_current * self.exposure_time * self.quantum_efficiency
     
 
-    def read_out(self):
+    def read_out(self, flux_image):
+        # add incoming wavefront flux
+        self.accumulated_charge += flux_image * self.exposure_time * self.quantum_efficiency
+
+        # add dark current
+        self.accumulated_charge += self.dark_current * self.exposure_time * self.quantum_efficiency
 
         # don't overwrite output
         image = self.accumulated_charge.copy()     
 
         # add photon noise                             
-        image = large_poisson(image)                                   
+        # image = large_poisson(image)  
+        image = xp.random.poisson(image)                                 
 
         # add read noise         
         image += xp.random.normal(loc=0, size=xp.shape(image), scale=self.read_noise)  
