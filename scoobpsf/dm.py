@@ -305,27 +305,27 @@ class DeformableMirror(poppy.AnalyticOpticalElement):
         self.actuators = xp.zeros(self.Nacts)
         
         if inf_fun is not None and inf_sampling is not None:
-            print('Using the influence function supplied.')
+            # print('Using the influence function supplied.')
             self.inf_fun = inf_fun
             self.inf_sampling = inf_sampling
             self.inf_matrix = None
         elif inf_cube is not None and inf_sampling is not None:
-            print('Using the influence function cube supplied.')
+            # print('Using the influence function cube supplied.')
             self.inf_matrix = inf_cube.reshape(self.Nacts, self.inf_cube.shape[1]**2,).T
             self.inf_sampling = inf_sampling
             self.inf_fun = None
         elif inf_fun is None and inf_cube is None:
-            print('Using default Gaussian influence function.')
+            # print('Using default Gaussian influence function.')
             self.inf_fun, self.inf_sampling = make_gaussian_inf_fun(act_spacing=300e-6*u.m, sampling=10, coupling=0.15,)
             self.inf_matrix = None
             
         self.inf_pixelscale = self.act_spacing/(self.inf_sampling*u.pix)
 
         self.include_reflection = include_reflection
-        if self.include_reflection:
-            print('Including factor of 2 from reflection when computing OPD.')
-        else:
-            print('Not including factor of 2 from reflection when computing OPD.')
+        # if self.include_reflection:
+        #     print('Including factor of 2 from reflection when computing OPD.')
+        # else:
+        #     print('Not including factor of 2 from reflection when computing OPD.')
 
         self.aperture = aperture
         self.planetype = poppy.poppy_core.PlaneType.intermediate

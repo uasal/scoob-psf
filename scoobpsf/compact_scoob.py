@@ -27,6 +27,7 @@ class CORO():
                  dm_ref=np.zeros((34,34)),
                  dm_inf=None, # defaults to inf.fits
                  Imax_ref=1,
+                 entrance_flux=None, 
                  use_fieldstop=False,
                  scc_diam=None,
                  scc_pinhole_position=None, 
@@ -37,6 +38,8 @@ class CORO():
         self.dm_pupil_diam = 9.4*u.mm
         self.lyot_pupil_diam = 9.4*u.mm
         self.lyot_diam = 8.6*u.mm
+
+        self.total_pupil_diam = 2.4*u.m # the assumed total pupil size for the actual telescope
 
         self.lyot_ratio = 8.6/9.4
 
@@ -98,6 +101,12 @@ class CORO():
         self.reset_dm()
 
         self.Imax_ref = Imax_ref
+        self.entrance_flux = entrance_flux
+        if self.entrance_flux is not None:
+            pixel_area = (self.total_pupil_diam/self.npix)**2
+            flux_per_pixel = self.entrance_flux * pixel_area
+            self.APERTURE *= xp.sqrt(flux_per_pixel.to_value(u.photon/u.second))
+
         self.reverse_parity = False
 
     def getattr(self, attr):
@@ -119,7 +128,7 @@ class CORO():
         act_spacing = 300e-6*u.m
         pupil_pxscl = self.dm_pupil_diam.to_value(u.m)/self.npix
         sampling = act_spacing.to_value(u.m)/pupil_pxscl
-        print('influence function sampling', sampling)
+        # print('influence function sampling', sampling)
         inf, inf_sampling = dm.make_gaussian_inf_fun(act_spacing=act_spacing, sampling=sampling, coupling=0.15,)
         self.DM = dm.DeformableMirror(inf_fun=inf, inf_sampling=sampling, name='DM')
 

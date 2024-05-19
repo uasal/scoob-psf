@@ -213,7 +213,7 @@ def apply_vortex(pupil_wf, npix, plot=False):
     fp_wf_high_res *= vortex_mask * high_res_window # apply FPM
     pupil_wf_high_res = mft_reverse(fp_wf_high_res, high_res_sampling * oversample, Nfpm,)
 
-    post_fpm_pupil = pupil_wf_low_res + pupil_wf_high_res
+    post_fpm_pupil = (pupil_wf_low_res + pupil_wf_high_res)/2
 
     return post_fpm_pupil
 
