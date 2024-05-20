@@ -43,7 +43,10 @@ class ParallelizedScoob():
         self.Nact = self.dm_mask.shape[0]
         self.dm_ref = ray.get(actors[0].getattr.remote('dm_ref'))
 
+        self.Imax_ref = 1
+        self.normalize = False
         self.use_noise = False
+
         self.optical_throughput = 0.5
         self.qe = 0.5
         self.read_noise = 1.5
@@ -113,6 +116,12 @@ class ParallelizedScoob():
 
         if self.use_noise:
             im = self.add_noise(im)
+            if xp.max(im)==self.sat_thresh:
+                print('WARNING: Image became saturated')
+            if self.normalize: 
+                im = im.astype(xp.float64) / self.exp_time / self.gain
+        
+        im = im.astype(xp.float64)/self.Imax_ref
 
         return im
 

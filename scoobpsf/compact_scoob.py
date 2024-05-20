@@ -49,6 +49,7 @@ class CORO():
         self.use_fieldstop = use_fieldstop
 
         self.return_pupil = False
+        self.scc_mode = False
 
         self.scc_diam = scc_diam
         if scc_pinhole_position is None:
