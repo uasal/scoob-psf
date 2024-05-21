@@ -47,13 +47,15 @@ class ParallelizedScoob():
         self.normalize = False
         self.use_noise = False
 
-        self.optical_throughput = 0.5
+        self.optical_throughput = 0.1
         self.qe = 0.5
         self.read_noise = 1.5
         self.bias = 10
         self.gain = 5
         self.nbits = 16
         self.sat_thresh = 2**self.nbits - 1
+
+        self.var_exp_times = None
 
     def getattr(self, attr):
         return ray.get(self.actors[0].getattr.remote(attr))
@@ -98,14 +100,17 @@ class ParallelizedScoob():
     def add_noise(self, flux_image):
         # flux_image is provided as an array in units of photons/sec/pixel
         counts = flux_image * self.exp_time * self.optical_throughput * self.qe
-        noisy_im = xp.random.poisson(counts) * self.gain
-        counts += self.bias
+        noisy_im = xp.random.poisson(counts) * self.gain # this step should take into account electrons per ADU
+        noisy_im = noisy_im.astype(xp.float64) + self.bias
         noisy_im += int(xp.round(xp.random.normal(self.read_noise)))
 
         noisy_im[noisy_im>self.sat_thresh] = self.sat_thresh
         return noisy_im
 
     def snap(self):
+        if self.var_exp_times is not None:
+            return self.snap_var_exp()
+
         pending_ims = []
         for i in range(self.Nactors):
             future_ims = self.actors[i].snap.remote()
@@ -124,6 +129,34 @@ class ParallelizedScoob():
         im = im.astype(xp.float64)/self.Imax_ref
 
         return im
+
+    def snap_var_exp(self, plot=False):
+        total_flux = 0.0
+        pixel_weights = 0.0
+        for i in range(ims.shape[0]):
+            frame = ims[i]
+            exp_time = exp_times[i]
+            pixel_sat_mask = frame > (2**self.nbits - 100)
+
+            if bias is not None:
+                frame -= bias
+            
+            pixel_weights += ~pixel_sat_mask
+            flux_im = frame/exp_time
+            flux_im[pixel_sat_mask] = 0 # mask out the saturated pixels
+
+            if plot: 
+                imshows.imshow3(pixel_sat_mask, frame, flux_im, 
+                                'Pixel Saturation Mask', 
+                                f'Frame:\nExposure Time = {exp_time}s', 
+                                'Masked Flux Image', 
+                                lognorm2=True, lognorm3=True)
+                
+            total_flux += flux_im
+            
+        total_flux_im = total_flux/pixel_weights
+
+        return total_flux_im
 
     
         
