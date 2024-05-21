@@ -105,6 +105,7 @@ class ParallelizedScoob():
         noisy_im += int(xp.round(xp.random.normal(self.read_noise)))
 
         noisy_im[noisy_im>self.sat_thresh] = self.sat_thresh
+        if xp.max(noisy_im)==self.sat_thresh: print('WARNING: Image became saturated')
         return noisy_im
 
     def snap(self):
@@ -121,8 +122,6 @@ class ParallelizedScoob():
 
         if self.use_noise:
             im = self.add_noise(im)
-            if xp.max(im)==self.sat_thresh:
-                print('WARNING: Image became saturated')
             if self.normalize: 
                 im = im.astype(xp.float64) / self.exp_time / self.gain
         
