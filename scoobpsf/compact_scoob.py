@@ -110,6 +110,8 @@ class CORO():
 
         self.reverse_parity = False
 
+        self.use_oap_ap = False
+
     def getattr(self, attr):
         return getattr(self, attr)
     
@@ -250,7 +252,7 @@ class CORO():
         if save_wfs: wfs.append(copy.copy(self.wf))
 
         dm_surf = utils.pad_or_crop(self.DM.get_surface(), self.N)
-        self.wf *= xp.exp(1j*4*np.pi*dm_surf/self.wavelength.to_value(u.m))
+        self.wf *= xp.exp(1j*4*np.pi/self.wavelength.to_value(u.m) * dm_surf)
         if save_wfs: wfs.append(copy.copy(self.wf))
 
         if self.return_pupil:
@@ -261,11 +263,32 @@ class CORO():
             self.wf = utils.pad_or_crop(self.wf, self.N)
         if save_wfs: wfs.append(copy.copy(self.wf))
 
-        self.wf *= utils.pad_or_crop(self.LYOT, self.N).astype(complex)
-        if self.reverse_parity: self.wf = xp.rot90(xp.rot90(self.wf))
-        if save_wfs: wfs.append(copy.copy(self.wf))
+        # self.wf *= utils.pad_or_crop(self.LYOT, self.N).astype(complex)
+        # if self.reverse_parity: self.wf = xp.rot90(xp.rot90(self.wf))
+        # if save_wfs: wfs.append(copy.copy(self.wf))
 
         if self.llowfsc_mode: 
+            # propagate backwards to apply the 25.4mm aperture of the OAP
+            if self.use_oap_ap:
+                # imshows.imshow1(xp.abs(self.wf), 'WF at Lyot Pupil')
+                self.wf = props.ang_spec(self.wf, self.wavelength, -450*u.mm, self.lyot_pupil_diam/(self.npix*u.pix))
+                # imshows.imshow1(xp.abs(self.wf), 'WF at the OAP')
+
+                oap_wf = poppy.FresnelWavefront(beam_radius=self.lyot_pupil_diam/2, npix=self.npix, oversample=self.oversample)
+                oap_ap = poppy.CircularAperture(radius=15*u.mm/2).get_transmission(oap_wf)
+                self.wf *= oap_ap
+                # imshows.imshow2(oap_ap, xp.abs(self.wf), 'OAP Aperture', 'WF after OAP')
+
+                self.wf = props.ang_spec(self.wf, self.wavelength, 450*u.mm, self.lyot_pupil_diam/(self.npix*u.pix))
+                if save_wfs: wfs.append(copy.copy(self.wf))
+                # imshows.imshow1(xp.abs(self.wf), 'WF at the Lyot Pupil')
+
+            # Apply the lyot stop
+            self.wf *= utils.pad_or_crop(self.LYOT, self.N).astype(complex)
+            if self.reverse_parity: self.wf = xp.rot90(xp.rot90(self.wf))
+            if save_wfs: wfs.append(copy.copy(self.wf))
+
+            # Use TF and MFT to propagate to defocused image
             fnum = self.llowfsc_fl.to_value(u.mm)/self.lyot_diam.to_value(u.mm)
             tf = props.get_fresnel_TF(self.llowfsc_defocus.to_value(u.m) * self.oversample**2, 
                                       self.N, self.wavelength.to_value(u.m), fnum)
@@ -277,6 +300,10 @@ class CORO():
                 return wfs
             else:
                 return self.wf
+            
+        self.wf *= utils.pad_or_crop(self.LYOT, self.N).astype(complex)
+        if self.reverse_parity: self.wf = xp.rot90(xp.rot90(self.wf))
+        if save_wfs: wfs.append(copy.copy(self.wf))
 
         if self.use_fieldstop:
             self.wf = xp.fft.ifftshift(xp.fft.fft2(xp.fft.fftshift(self.wf)))

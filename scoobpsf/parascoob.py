@@ -51,11 +51,16 @@ class ParallelizedScoob():
         self.qe = 0.5
         self.read_noise = 1.5
         self.bias = 10
-        self.gain = 5
+        self.gain = 1
         self.nbits = 16
-        self.sat_thresh = 2**self.nbits - 1
+        self.sat_thresh = 2**self.nbits - 1000
+        self.subtract_bias = False
+        
+        self.exp_time = 1
+        self.Nframes = 1
 
-        self.var_exp_times = None
+        self.exp_times = None
+        self.Nframes_per_exp = None
 
     def getattr(self, attr):
         return ray.get(self.actors[0].getattr.remote(attr))
@@ -104,14 +109,14 @@ class ParallelizedScoob():
         noisy_im = noisy_im.astype(xp.float64) + self.bias
         noisy_im += int(xp.round(xp.random.normal(self.read_noise)))
 
-        noisy_im[noisy_im>self.sat_thresh] = self.sat_thresh
-        if xp.max(noisy_im)==self.sat_thresh: print('WARNING: Image became saturated')
+        noisy_im[noisy_im>(2**self.nbits - 1)] = 2**self.nbits - 1
+        if xp.max(noisy_im)==int(2**self.nbits - 1): print('WARNING: Image became saturated')
         return noisy_im
 
     def snap(self):
-        if self.var_exp_times is not None:
-            return self.snap_var_exp()
-
+        if self.exp_times is not None and self.Nframes_per_exp is not None:
+            return self.snap_many(plot=True)
+            
         pending_ims = []
         for i in range(self.Nactors):
             future_ims = self.actors[i].snap.remote()
@@ -121,41 +126,62 @@ class ParallelizedScoob():
         im = xp.sum(ims, axis=0)
 
         if self.use_noise:
-            im = self.add_noise(im)
-            if self.normalize: 
+            mean_frame = 0.0
+            for i in range(self.Nframes):
+                mean_frame += self.add_noise(im)/self.Nframes
+            im = mean_frame
+
+            if self.normalize:
                 im = im.astype(xp.float64) / self.exp_time / self.gain
-        
+
         im = im.astype(xp.float64)/self.Imax_ref
 
         return im
 
-    def snap_var_exp(self, plot=False):
-        total_flux = 0.0
-        pixel_weights = 0.0
-        for i in range(ims.shape[0]):
-            frame = ims[i]
-            exp_time = exp_times[i]
-            pixel_sat_mask = frame > (2**self.nbits - 100)
+    def snap_many(self, plot=False):
+        pending_ims = []
+        for i in range(self.Nactors):
+            future_ims = self.actors[i].snap.remote()
+            pending_ims.append(future_ims)
+        ims = ray.get(pending_ims)
+        ims = xp.array(ims)
+        flux_im = xp.sum(ims, axis=0)
 
-            if bias is not None:
-                frame -= bias
+        print(self.exp_times, self.Nframes_per_exp)
+        if len(self.exp_times)!=len(self.Nframes_per_exp):
+            raise ValueError('The specified number of frames per exposure time must match the specified number of exposure times.')
+            
+        total_im = 0.0
+        pixel_weights = 0.0
+        for i in range(len(self.exp_times)):
+            self.exp_time = self.exp_times[i]
+            self.Nframes = self.Nframes_per_exp[i]
+            mean_frame = 0.0
+            for j in range(self.Nframes):
+                mean_frame += self.add_noise(flux_im)/self.Nframes
+                
+            pixel_sat_mask = mean_frame > self.sat_thresh
+
+            if self.subtract_bias is not None:
+                mean_frame -= self.subtract_bias
             
             pixel_weights += ~pixel_sat_mask
-            flux_im = frame/exp_time
-            flux_im[pixel_sat_mask] = 0 # mask out the saturated pixels
+            normalized_im = mean_frame/self.exp_time 
+            normalized_im[pixel_sat_mask] = 0 # mask out the saturated pixels
 
             if plot: 
-                imshows.imshow3(pixel_sat_mask, frame, flux_im, 
-                                'Pixel Saturation Mask', 
-                                f'Frame:\nExposure Time = {exp_time}s', 
+                imshows.imshow3(pixel_weights, mean_frame, normalized_im, 
+                                'Pixel Weight Map', 
+                                f'Frame:\nExposure Time = {self.exp_time:.2e}s', 
                                 'Masked Flux Image', 
-                                lognorm2=True, lognorm3=True)
+                                # lognorm2=True, lognorm3=True,
+                                )
                 
-            total_flux += flux_im
+            total_im += normalized_im
             
-        total_flux_im = total_flux/pixel_weights
+        total_im /= pixel_weights
 
-        return total_flux_im
+        return total_im
 
     
         

@@ -58,7 +58,7 @@ def interp_arr(arr, pixelscale, new_pixelscale, order=1):
         old_xmax = pixelscale * Nold/2
 
         x,y = jnp.ogrid[-old_xmax:old_xmax-pixelscale:Nold*1j,
-                       -old_xmax:old_xmax-pixelscale:Nold*1j]
+                        -old_xmax:old_xmax-pixelscale:Nold*1j]
 
         Nnew = int(np.ceil(2*old_xmax/new_pixelscale)) - 1
         new_xmax = new_pixelscale * Nnew/2
@@ -83,8 +83,8 @@ def make_gaussian_inf_fun(act_spacing=300e-6*u.m,
                           sampling=25, 
                           Nacts_per_inf=4, # number of influence functions across the grid
                           coupling=0.15,
-                            plot=False,
-                            save_fits=None):
+                          plot=False,
+                          save_fits=None):
 
     ng = int(sampling*Nacts_per_inf)
 
@@ -103,7 +103,6 @@ def make_gaussian_inf_fun(act_spacing=300e-6*u.m,
     rcoupled = d*jnp.sqrt(-jnp.log(coupling)) 
     
     if plot:
-
         fig,ax = imshow1(ensure_np_array(inf), pxscl=pxscl, 
                          patches=[patches.Circle((0,0), rcoupled, fill=False, color='c'),
                                   patches.Circle((0,0), rcoupled/2, fill=False, color='g', linewidth=1.5)], 
@@ -174,8 +173,8 @@ def map_actuators_to_command(act_vector, dm_mask):
         return command
 
 def get_surf(command, 
-             inf_fun, inf_sampling,
-             inf_pixelscale=None, pixelscale=None):
+                inf_fun, inf_sampling,
+                inf_pixelscale=None, pixelscale=None):
 
     Nact = command.shape[0]
     if inf_pixelscale is None and pixelscale is None:
@@ -186,12 +185,12 @@ def get_surf(command,
         inf_sampling = inf_sampling / scale
         inf_fun = interp_arr(inf_fun, inf_pixelscale.to_value(u.m/u.pix), pixelscale.to_value(u.m/u.pix), order=1)
         # inf_fun = interp_arr(self.inf_fun, scale)
-    print(inf_sampling)
+
     xc = inf_sampling*(jnp.linspace(-Nact//2, Nact//2-1, Nact) + 1/2)
     yc = inf_sampling*(jnp.linspace(-Nact//2, Nact//2-1, Nact) + 1/2)
 
-    oversample = 2
-    Nsurf = int(jnp.round(inf_sampling)*Nact*oversample)
+    Nsurf = int(inf_sampling*Nact)
+    Nsurf = int(2 ** np.ceil(np.log2(Nsurf - 1)))  # next power of 2
 
     fx = xp.fft.fftfreq(Nsurf)
     fy = xp.fft.fftfreq(Nsurf)
@@ -201,21 +200,13 @@ def get_surf(command,
 
     mft_command = Mx@command@My
 
-    fourier_inf_fun = jnp.fft.fft2(utils.pad_or_crop(inf_fun, Nsurf))
+    fourier_inf_fun = jnp.fft.fft2(pad_or_crop(inf_fun, Nsurf))
     fourier_surf = fourier_inf_fun * mft_command
     
     surf = jnp.fft.ifft2(fourier_surf).real
-    surf = pad_or_crop(surf, Nsurf//2 + int(jnp.floor(inf_sampling)))
+    # surf = pad_or_crop(surf, Nsurf//2 + int(jnp.floor(inf_sampling)))
 
     return surf
-
-    # N = int(np.sqrt(inf_matrix.shape[0]))
-    # surf = inf_matrix.dot(actuators).reshape(N, N)
-    # if pixelscale is None and inf_pixelscale is None:
-    #     return surf
-    # else:
-    #     surf = interp_arr(surf, inf_pixelscale.to_value(u.m/u.pix), pixelscale.to_value(u.m/u.pix), order=1)
-    #     return surf
 
 def get_opd(command, 
             inf_fun, inf_sampling,

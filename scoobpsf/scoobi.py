@@ -72,7 +72,6 @@ class SCOOBI():
                  dm_channel,
                  cam_channel,
                  dm_ref=np.zeros((34,34)),
-                 dm_delay=0.01,
                  x_shift=0,
                  y_shift=0,
                  Nframes=1,
@@ -108,7 +107,6 @@ class SCOOBI():
         self.full_stroke = 1.5e-6*u.m
         
         self.dm_ref = dm_ref
-        self.dm_delay = dm_delay
         self.dm_gain = 1
         self.reset_dm()
         
@@ -147,6 +145,13 @@ class SCOOBI():
         self.y_shift = y_shift
 
         self.subtract_bias = False
+
+        self.exp_times = None
+        self.Nframes_per_exp = None
+
+        self.exp_time_delay = 0.1
+        self.attenuation_delay = 0.1
+        self.dm_delay = 0.01
     
     # @property
     # def bias(self):
@@ -170,7 +175,7 @@ class SCOOBI():
         # self._exp_time = value
         client0.wait_for_properties(['scicam_2600.exptime'])
         client0['scicam_2600.exptime.target'] = value.to_value(u.s)
-        time.sleep(0.2)
+        time.sleep(self.exp_time_delay)
         self._exp_time = client0['scicam_2600.exptime.current'] * u.s 
         
     # @property
@@ -192,7 +197,7 @@ class SCOOBI():
     @attenuation.setter
     def attenuation(self, value):
         client['fiberatten.atten.target'] = value
-        time.sleep(0.5)
+        time.sleep(self.attenuation_delay)
         self._attenuation = value
 
     def zero_dm(self):
@@ -226,8 +231,8 @@ class SCOOBI():
 
     def snap(self, nims=None, plot=False, vmin=None):
         
-        if isinstance(self.Nframes, list):
-            return self.snap_many()
+        if self.exp_times is not None and self.Nframes_per_exp is not None:
+            return self.snap_many(plot=True)
         
         if self.Nframes>1:
             ims = self.CAM.grab_many(self.Nframes)
@@ -251,6 +256,44 @@ class SCOOBI():
             imshows.imshow1(im, lognorm=True, pxscl=self.psf_pixelscale_lamD, grid=True, vmin=vmin)
         
         return im
+    
+    def snap_many(self, plot=False):
+        if len(self.exp_times)!=len(self.Nframes_per_exp):
+            raise ValueError('The specified number of frames per exposure time must match the specified number of exposure times.')
+            
+        total_im = 0.0
+        pixel_weights = 0.0
+        for i in range(len(self.exp_times)):
+            self.exp_time = self.exp_times[i]
+            self.Nframes = self.Nframes_per_exp[i]
+
+            frames = self.CAM.grab_many(self.Nframes)
+            mean_frame = np.sum(frames, axis=0)/self.Nframes
+            mean_frame = _scipy.ndimage.shift(mean_frame, (self.y_shift, self.x_shift), order=0)
+            mean_frame = pad_or_crop(mean_frame, self.npsf)
+                
+            pixel_sat_mask = mean_frame > self.sat_thresh
+
+            if self.subtract_bias is not None:
+                mean_frame -= self.subtract_bias
+            
+            pixel_weights += ~pixel_sat_mask
+            normalized_im = mean_frame/self.exp_time 
+            normalized_im[pixel_sat_mask] = 0 # mask out the saturated pixels
+
+            if plot: 
+                imshows.imshow3(pixel_weights, mean_frame, normalized_im, 
+                                'Pixel Weight Map', 
+                                f'Frame:\nExposure Time = {self.exp_time:.2e}s', 
+                                'Masked Flux Image', 
+                                # lognorm2=True, lognorm3=True,
+                                )
+                
+            total_im += normalized_im
+            
+        total_im /= pixel_weights
+
+        return total_im
     
     # def snap_llowfsc(self):
 

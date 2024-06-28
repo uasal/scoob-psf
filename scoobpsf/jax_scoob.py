@@ -23,6 +23,45 @@ device = jax.devices()[0].device_kind
 print(f'Jax platform: {platform}')
 print(f'Jax device: {device}')
 
+wavelength_c = 633e-9*u.m
+pupil_diam = 6.75*u.mm
+dm_pupil_diam = 9.4*u.mm
+lyot_pupil_diam = 9.4*u.mm
+lyot_diam = 8.6*u.mm
+lyot_ratio = 8.6/9.4
+
+psf_pixelscale_lamD = 0.17027909426013688 # at the central wavelength of 633nm
+
+npix = 500
+oversample = 8192/npix
+N = int(npix*oversample)
+npix_lyot = int(lyot_ratio * npix) # 90% diameter lyot stop
+
+Nact = 34
+Nacts = 952
+dm_mask = jax_dm.make_dm_mask()
+
+wf = poppy.FresnelWavefront(beam_radius=dm_pupil_diam/2, npix=npix, oversample=1) # pupil wavefront
+APERTURE = jnp.array(ensure_np_array(poppy.CircularAperture(radius=dm_pupil_diam/2).get_transmission(wf)))
+
+wf = poppy.FresnelWavefront(beam_radius=lyot_pupil_diam/2, npix=npix, oversample=1) # pupil wavefront
+LYOT = jnp.array(ensure_np_array(poppy.CircularAperture(radius=lyot_diam/2).get_transmission(wf)))
+
+y,x = (jnp.indices((N, N)) - N//2) * 1/oversample
+r = jnp.sqrt(x**2 + y**2)
+th = jnp.arctan2(y,x)
+opaque_spot = r>0.5
+VORTEX = opaque_spot * jnp.exp(1j*6*th)
+
+act_spacing = 300e-6*u.m
+pupil_pxscl = dm_pupil_diam.to_value(u.m)/npix
+sampling = act_spacing.to_value(u.m)/pupil_pxscl
+inf_fun, inf_sampling, inf_pixelscale = jax_dm.make_gaussian_inf_fun(sampling=sampling, 
+                                                                     Nacts_per_inf=4, 
+                                                                     coupling=0.15,
+                                                                    #  plot=True,
+                                                                     )
+
 def pad_or_crop( arr_in, npix ):
     n_arr_in = arr_in.shape[0]
     if n_arr_in == npix:
@@ -116,7 +155,7 @@ def make_focal_grid(npix, oversample, polar=True, center='pixel'):
 def make_vortex_phase_mask(focal_grid_polar,
                            charge=6, 
                            singularity=None, 
-                           focal_length=500*u.mm, pupil_diam=9.7*u.mm, wavelength=632.8*u.nm):
+                           focal_length=500*u.mm, pupil_diam=9.6*u.mm, wavelength=633*u.nm):
     
     r = focal_grid_polar[0]
     th = focal_grid_polar[1]
@@ -126,25 +165,22 @@ def make_vortex_phase_mask(focal_grid_polar,
     phasor = jnp.exp(1j*charge*th)
     
     if singularity is not None:
-#         sing*D/(focal_length*lam)
         mask = r>(singularity*pupil_diam/(focal_length*wavelength)).decompose()
         phasor *= mask
     
     return phasor
 
 def generate_wfe(diam, 
-                 opd_index=2.5, amp_index=2, 
+                 opd_index=2.5, amp_index=2.5, 
                  opd_seed=1234, amp_seed=12345,
                  opd_rms=10*u.nm, amp_rms=0.05,
-                 npix=256, oversample=4, 
+                 npix=256,
                  wavelength=500*u.nm):
     amp_rms *= u.nm
     wf = poppy.FresnelWavefront(beam_radius=diam/2, npix=npix, oversample=oversample, wavelength=wavelength)
     wfe_opd = poppy.StatisticalPSDWFE(index=opd_index, wfe=opd_rms, radius=diam/2, seed=opd_seed).get_opd(wf)
     wfe_amp = poppy.StatisticalPSDWFE(index=amp_index, wfe=amp_rms, radius=diam/2, seed=amp_seed).get_opd(wf)
-    # print(wfe_amp)
     wfe_amp /= amp_rms.unit.to(u.m)
-    # wfe_amp += 1
     
     wfe_amp = jnp.asarray(ensure_np_array(wfe_amp))
     wfe_opd = jnp.asarray(ensure_np_array(wfe_opd))
@@ -168,101 +204,41 @@ def make_pupil(pupil_diam, npix, oversample, ratio=1):
     wf = poppy.FresnelWavefront(beam_radius=pupil_diam/2, npix=npix, oversample=oversample)
     circ = poppy.CircularAperture(radius=ratio*pupil_diam/2)
     pupil = ensure_np_array(circ.get_transmission(wf))
-
     return jnp.array(pupil)
 
 # PROPAGATION FUNCTIONS
 
 def fft(arr):
-    ftarr = jnp.fft.ifftshift(jnp.fft.fft2(jnp.fft.fftshift(arr)))
-    return ftarr
+    return jnp.fft.ifftshift(jnp.fft.fft2(jnp.fft.fftshift(arr)))
 
 def ifft(arr):
-    iftarr = jnp.fft.fftshift(jnp.fft.ifft2(jnp.fft.ifftshift(arr)))
-    return iftarr
-
-def mft_symmetric(wavefront, nlamD, npix,):
-    # this code was duplicated from POPPY's MFT method
-    npupY, npupX = wavefront.shape
-    nlamDX, nlamDY = nlamD, nlamD
-    npixY, npixX = npix, npix
-
-    dU = nlamDX / float(npixX)
-    dV = nlamDY / float(npixY)
-    dX = 1.0 / float(npupX)
-    dY = 1.0 / float(npupY)
-
-    offsetY, offsetX = 0.0, 0.0
-    Xs = (jnp.arange(npupX, dtype=float) - float(npupX) / 2.0 - offsetX + 0.5) * dX
-    Ys = (jnp.arange(npupY, dtype=float) - float(npupY) / 2.0 - offsetY + 0.5) * dY
-
-    Us = (jnp.arange(npixX, dtype=float) - float(npixX) / 2.0 - offsetX + 0.5) * dU
-    Vs = (jnp.arange(npixY, dtype=float) - float(npixY) / 2.0 - offsetY + 0.5) * dV
-
-    XU = jnp.outer(Xs, Us)
-    YV = jnp.outer(Ys, Vs)
-
-    expXU = jnp.exp(-2.0 * np.pi * -1j * XU)
-    expYV = jnp.exp(-2.0 * np.pi * -1j * YV).T
-    t1 = jnp.dot(expYV, wavefront)
-    t2 = jnp.dot(t1, expXU)
-
-    norm_coeff = np.sqrt((nlamDY * nlamDX) / (npupY * npupX * npixY * npixX))
-
-    return norm_coeff * t2
-
-def mft_fftstyle(plane, nlamD, npix):
-    npupY, npupX = plane.shape
-    nlamDX, nlamDY = nlamD, nlamD
-    npixY, npixX = npix, npix
-
-    # In the following: X and Y are coordinates in the input plane
-    #                   U and V are coordinates in the output plane
-
-    dU = nlamDX / float(npixX)
-    dV = nlamDY / float(npixY)
-    dX = 1.0 / float(npupX)
-    dY = 1.0 / float(npupY)
-
-    Xs = (xp.arange(npupX, dtype=float) - (npupX / 2)) * dX
-    Ys = (xp.arange(npupY, dtype=float) - (npupY / 2)) * dY
-
-    Us = (xp.arange(npixX, dtype=float) - npixX / 2) * dU
-    Vs = (xp.arange(npixY, dtype=float) - npixY / 2) * dV
-
-    XU = xp.outer(Xs, Us)
-    YV = xp.outer(Ys, Vs)
-
-    # SIGN CONVENTION: plus signs in exponent for basic forward propagation, with
-    # phase increasing with time. This convention differs from prior poppy version < 1.0
-    expXU = xp.exp(-2.0 * np.pi * -1j * XU)
-    expYV = xp.exp(-2.0 * np.pi * -1j * YV).T
-    t1 = xp.dot(expYV, plane)
-    t2 = xp.dot(t1, expXU)
-
-    norm_coeff = np.sqrt((nlamDY * nlamDX) / (npupY * npupX * npixY * npixX))
-    return norm_coeff * t2
+    return jnp.fft.ifftshift(jnp.fft.ifft2(jnp.fft.fftshift(arr)))
 
 # Forward Model
-
-def forward_model(wavefront, WFE, dm_phasor, FPM, LYOT, 
-                  npix, oversample, 
-                  npsf=200, pixelscale_lamD=1/4, 
+def forward_model(dm_command, WFE, FPM, 
+                  wavelength=633e-9, 
+                  pixelscale_lamD=1/4, 
                   Imax_ref=1):
+        
+        wavefront = pad_or_crop(APERTURE, N)
+        wavefront *= pad_or_crop(WFE, N) # apply WFE data
 
-        N = int(npix*oversample)
-        wavefront *= WFE # apply WFE data
-        wavefront *= dm_phasor
+        dm_surf = jax_dm.get_surf(dm_command, inf_fun, inf_sampling)
+        dm_opd = pad_or_crop(2*dm_surf, N)
+        imshow2(dm_command, dm_surf)
+        wavefront *= jnp.exp(1j*2*np.pi*dm_opd/wavelength)
         
         wavefront = fft(wavefront)
         wavefront *= FPM
         wavefront = ifft(wavefront)
     
-        wavefront *= LYOT # apply the Lyot stop
+        wavefront *= pad_or_crop(LYOT, N) # apply the Lyot stop
         
         # propagate to image plane with MFT
-        nlamD = npsf * pixelscale_lamD * oversample
-        wavefront = mft_fftstyle(wavefront, nlamD, npsf)
+        im_oversample = 1/pixelscale_lamD
+        Nim = int(np.ceil(npix_lyot*im_oversample))
+        wavefront = pad_or_crop(wavefront, Nim)
+        wavefront = fft(wavefront)
         
         wavefront /= jnp.sqrt(Imax_ref)
         

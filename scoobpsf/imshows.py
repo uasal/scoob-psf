@@ -80,12 +80,12 @@ def imshow2(arr1, arr2,
             figsize=(10,4), dpi=125, wspace=0.2):
     fig,ax = plt.subplots(nrows=1, ncols=2, figsize=figsize, dpi=dpi)
     
-    arr1 = ensure_np_array(arr1)
-    arr2 = ensure_np_array(arr2)
-    
     npix1, npix2 = (npix, npix) if npix is not None else (npix1, npix2)
     if npix1 is not None: arr1 = utils.pad_or_crop(arr1, npix1)
     if npix2 is not None: arr2 = utils.pad_or_crop(arr2, npix2)
+
+    arr1 = ensure_np_array(arr1)
+    arr2 = ensure_np_array(arr2)
     
     pxscl1, pxscl2 = (pxscl, pxscl) if pxscl is not None else (pxscl1, pxscl2)
     if pxscl1 is not None:

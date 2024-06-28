@@ -63,14 +63,5 @@ def ensure_np_array(arr):
     elif cupy_avail and isinstance(arr, cupy.ndarray):
         return arr.get()
         
-# def vectorize(arr, mask):
-    
-#     if isinstance(arr, np.ndarray):
-#         masked = arr[mask]
-#     elif use_cupy and isinstance(arr, cp.ndarray):
-#         masked = arr[mask]
-#     elif use_jax and isinstance(arr, jnp.ndarray):
-#         masked = arr.at[mask]
-        
         
         
