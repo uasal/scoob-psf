@@ -104,33 +104,6 @@ def get_surface(command,
 
     return surf
 
-def reverse_dm(command, inf_fun, inf_sampling,):
-
-    Nact = command.shape[0]
-    inf_sampling = inf_sampling
-    inf_fun = inf_fun
-
-    xc = inf_sampling*(xp.linspace(-Nact//2, Nact//2-1, Nact) + 1/2)
-    yc = inf_sampling*(xp.linspace(-Nact//2, Nact//2-1, Nact) + 1/2)
-
-    Nsurf = int(inf_sampling*Nact)
-    Nsurf = int(2 ** np.ceil(np.log2(Nsurf - 1)))  # next power of 2
-
-    fx = xp.fft.fftfreq(Nsurf)
-    fy = xp.fft.fftfreq(Nsurf)
-
-    Mx = xp.exp(-1j*2*np.pi*xp.outer(xc,fx))
-    My = xp.exp(-1j*2*np.pi*xp.outer(fy,yc))
-
-    mft_command = Mx@command@My
-
-    fourier_inf_fun = xp.fft.fft2(pad_or_crop(inf_fun, Nsurf))
-    fourier_surf = fourier_inf_fun * mft_command
-    
-    surf = xp.fft.ifft2(fourier_surf).real
-
-    return surf
-
 # PROPAGATION FUNCTIONS
 
 def fft(arr):
