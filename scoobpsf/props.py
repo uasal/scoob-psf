@@ -120,8 +120,8 @@ def mft_reverse(fpwf, psf_pixelscale_lamD, npix):
     ux = xp.outer(Xs, Us)
     yv = xp.outer(Us, Xs)
 
-    My = xp.exp(-1j*2*np.pi*yv) 
-    Mx = xp.exp(-1j*2*np.pi*ux) 
+    My = xp.exp(1j*2*np.pi*yv) 
+    Mx = xp.exp(1j*2*np.pi*ux) 
 
     norm_coeff = psf_pixelscale_lamD/npix 
 
