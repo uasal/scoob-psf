@@ -294,6 +294,7 @@ class CORO():
                                       self.N, self.wavelength.to_value(u.m), fnum)
             um_per_lamD = (self.wavelength * self.llowfsc_fl/self.lyot_diam).to(u.um)
             psf_pixelscale_lamD = (self.llowfsc_pixelscale.to(u.um/u.pix)/um_per_lamD).value
+            self.llowfsc_pixelscale_lamD = psf_pixelscale_lamD
             self.wf = props. mft_forward(tf*self.wf, psf_pixelscale_lamD*self.oversample, self.nllowfsc)
             if save_wfs: wfs.append(copy.copy(self.wf))
             if save_wfs:

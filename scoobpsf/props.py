@@ -75,7 +75,7 @@ def mft_forward(pupil, psf_pixelscale_lamD, npsf):
 
     npix = pupil.shape[0]
     dx = 1.0 / npix
-    Xs = (xp.arange(npix, dtype=float) - (npix / 2)) * dx
+    Xs = (xp.arange(npix, dtype=float) - (npix / 2) + 1/2) * dx
 
     du = psf_pixelscale_lamD
     Us = (xp.arange(npsf, dtype=float) - npsf / 2) * du
@@ -115,7 +115,7 @@ def mft_reverse(fpwf, psf_pixelscale_lamD, npix):
     Us = (xp.arange(npsf, dtype=float) - npsf / 2) * du
 
     dx = 1.0 / npix
-    Xs = (xp.arange(npix, dtype=float) - (npix / 2)) * dx
+    Xs = (xp.arange(npix, dtype=float) - (npix / 2) + 1/2) * dx
 
     ux = xp.outer(Xs, Us)
     yv = xp.outer(Us, Xs)
