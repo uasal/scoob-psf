@@ -17,6 +17,13 @@ import poppy
 
 from scipy.signal import windows
 
+def fft(arr):
+    return xp.fft.ifftshift(xp.fft.fft2(xp.fft.fftshift(arr)))
+
+def ifft(arr):
+    return xp.fft.fftshift(xp.fft.ifft2(xp.fft.ifftshift(arr)))
+
+
 def ang_spec(wavefront, wavelength, distance, pixelscale):
     """Propagate a wavefront a given distance via the angular spectrum method. 
 
