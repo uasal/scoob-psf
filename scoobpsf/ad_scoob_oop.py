@@ -119,7 +119,23 @@ class MODEL():
                                              coupling=0.15,)
         self.Nsurf = self.inf_fun.shape[0]
         self.dm_mask = make_dm_mask(self.Nact)
-        self.inf_matrix = make_inf_matrix(self.inf_fun, self.inf_sampling, self.dm_mask)
+        # self.inf_matrix = make_inf_matrix(self.inf_fun, self.inf_sampling, self.dm_mask)
+
+        self.inf_fun_fft = xp.fft.fftshift(xp.fft.fft2(xp.fft.ifftshift(self.inf_fun,)))
+        # DM command coordinates
+        xc = self.inf_sampling*(xp.linspace(-self.Nact//2, self.Nact//2-1, self.Nact) + 1/2)
+        yc = self.inf_sampling*(xp.linspace(-self.Nact//2, self.Nact//2-1, self.Nact) + 1/2)
+
+        # Influence function frequncy sampling
+        fx = xp.fft.fftshift(xp.fft.fftfreq(self.Nsurf))
+        fy = xp.fft.fftshift(xp.fft.fftfreq(self.Nsurf))
+
+        # forward DM model MFT matrices
+        self.Mx = xp.exp(-1j*2*np.pi*xp.outer(fx,xc))
+        self.My = xp.exp(-1j*2*np.pi*xp.outer(yc,fy))
+
+        self.Mx_back = xp.exp(1j*2*np.pi*xp.outer(xc,fx))
+        self.My_back = xp.exp(1j*2*np.pi*xp.outer(fy,yc))
 
         # Vortex model parameters
         self.oversample_vortex = 4.096
@@ -170,7 +186,12 @@ class MODEL():
         self.Nmask = int(control_mask.sum())
 
     def forward(self, actuators, use_vortex=True, use_wfe=False, return_pupil=False):
-        dm_surf = self.inf_matrix.dot(xp.array(actuators)).reshape(self.Nsurf,self.Nsurf)
+        # dm_surf = self.inf_matrix.dot(xp.array(actuators)).reshape(self.Nsurf,self.Nsurf)
+        dm_command = xp.zeros((self.Nact,self.Nact))
+        dm_command[self.dm_mask] = xp.array(actuators)
+        mft_command = self.Mx@dm_command@self.My
+        fourier_surf = self.inf_fun_fft * mft_command
+        dm_surf = xp.fft.ifftshift(xp.fft.ifft2(xp.fft.fftshift(fourier_surf,))).real
         dm_phasor = xp.exp(1j * 4*xp.pi/self.wavelength.to_value(u.m) * dm_surf)
 
         wf = utils.pad_or_crop(self.APERTURE, self.N).astype(xp.complex128)
@@ -342,7 +363,11 @@ def val_and_grad(del_acts, m, actuators, E_ab, r_cond, verbose=False):
 
     # Now pad back to the array size fo the DM surface to back propagate through the adjoint DM model
     dJ_dS_dm = utils.pad_or_crop(dJ_dS_dm, m.Nsurf)
-    dJ_dA = m.inf_matrix.T.dot(dJ_dS_dm.flatten()) + xp.array( 2*del_acts * r_cond**2 / (m.wavelength.to_value(u.m))**2 )
+    # dJ_dA = m.inf_matrix.T.dot(dJ_dS_dm.flatten()) + xp.array( 2*del_acts * r_cond**2 / (m.wavelength.to_value(u.m))**2 )
+    x2_bar = xp.fft.fftshift(xp.fft.fft2(xp.fft.ifftshift(dJ_dS_dm.real)))
+    x1_bar = m.inf_fun_fft.conjugate() * x2_bar
+    dJ_dA = m.Mx_back@x1_bar@m.My_back / ( m.Nsurf * m.Nact * m.Nact )
+    dJ_dA = dJ_dA[m.dm_mask].real
 
     return ensure_np_array(J), ensure_np_array(dJ_dA)
 
