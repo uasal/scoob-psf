@@ -229,11 +229,15 @@ class SCOOBI():
     def close_dm(self):
         self.DM.close()
 
-    def snap(self, nims=None, plot=False, vmin=None):
-        
-        if self.exp_times is not None and self.Nframes_per_exp is not None:
-            return self.snap_many(plot=True)
-        
+    def normalize(self, image):
+
+        im *= (1/self.gain) * 10**(self.attenuation/10) * (1/self.exp_time.to_value(u.s))
+        if self.Imax_ref is not None:
+            im /= self.Imax_ref
+
+        return image_ni
+
+    def snap(self, normalize=False, plot=False, vmin=None):
         if self.Nframes>1:
             ims = self.CAM.grab_many(self.Nframes)
             im = np.sum(ims, axis=0)/self.Nframes
@@ -248,52 +252,50 @@ class SCOOBI():
             im -= self.bias
             
         if self.normalize:
-            im *= (1/self.gain) * 10**(self.attenuation/10) * (1/self.exp_time.to_value(u.s))
-            if self.Imax_ref is not None:
-                im /= self.Imax_ref
+            self.normalize(im)
             
         if plot:
             imshows.imshow1(im, lognorm=True, pxscl=self.psf_pixelscale_lamD, grid=True, vmin=vmin)
         
         return im
     
-    def snap_many(self, plot=False):
-        if len(self.exp_times)!=len(self.Nframes_per_exp):
-            raise ValueError('The specified number of frames per exposure time must match the specified number of exposure times.')
+    def snap_many(self,):
+        return self.CAM.grab_many(self.Nframes)
+    
+def snap_many(images, Nframes_per_exp, exp_times, gains, plot=False):
+    total_im = 0.0
+    pixel_weights = 0.0
+    for i in range(len(self.exp_times)):
+        self.exp_time = self.exp_times[i]
+        self.Nframes = self.Nframes_per_exp[i]
+
+        frames = self.CAM.grab_many(self.Nframes)
+        mean_frame = np.sum(frames, axis=0)/self.Nframes
+        mean_frame = _scipy.ndimage.shift(mean_frame, (self.y_shift, self.x_shift), order=0)
+        mean_frame = pad_or_crop(mean_frame, self.npsf)
             
-        total_im = 0.0
-        pixel_weights = 0.0
-        for i in range(len(self.exp_times)):
-            self.exp_time = self.exp_times[i]
-            self.Nframes = self.Nframes_per_exp[i]
+        pixel_sat_mask = mean_frame > self.sat_thresh
 
-            frames = self.CAM.grab_many(self.Nframes)
-            mean_frame = np.sum(frames, axis=0)/self.Nframes
-            mean_frame = _scipy.ndimage.shift(mean_frame, (self.y_shift, self.x_shift), order=0)
-            mean_frame = pad_or_crop(mean_frame, self.npsf)
-                
-            pixel_sat_mask = mean_frame > self.sat_thresh
+        if self.subtract_bias is not None:
+            mean_frame -= self.subtract_bias
+        
+        pixel_weights += ~pixel_sat_mask
+        normalized_im = mean_frame/self.exp_time 
+        normalized_im[pixel_sat_mask] = 0 # mask out the saturated pixels
 
-            if self.subtract_bias is not None:
-                mean_frame -= self.subtract_bias
+        if plot: 
+            imshows.imshow3(pixel_weights, mean_frame, normalized_im, 
+                            'Pixel Weight Map', 
+                            f'Frame:\nExposure Time = {self.exp_time:.2e}s', 
+                            'Masked Flux Image', 
+                            # lognorm2=True, lognorm3=True,
+                            )
             
-            pixel_weights += ~pixel_sat_mask
-            normalized_im = mean_frame/self.exp_time 
-            normalized_im[pixel_sat_mask] = 0 # mask out the saturated pixels
+        total_im += normalized_im
+        
+    total_im /= pixel_weights
 
-            if plot: 
-                imshows.imshow3(pixel_weights, mean_frame, normalized_im, 
-                                'Pixel Weight Map', 
-                                f'Frame:\nExposure Time = {self.exp_time:.2e}s', 
-                                'Masked Flux Image', 
-                                # lognorm2=True, lognorm3=True,
-                                )
-                
-            total_im += normalized_im
-            
-        total_im /= pixel_weights
-
-        return total_im
+    return total_im
     
     # def snap_llowfsc(self):
 

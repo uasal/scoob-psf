@@ -211,101 +211,99 @@ class MODEL():
             return fpwf, E_pup
         else:
             return fpwf
-
-    def val_and_grad(self, del_acts, actuators, E_ab, r_cond, E_target=0.0, verbose=False):
-        # Convert array arguments into GPU arrays if necessary
-        E_ab = xp.array(E_ab)
-        E_target = xp.array(E_target)
-        
-        E_ab_l2norm = E_ab[self.control_mask].dot(E_ab[self.control_mask].conjugate()).real
-
-        # Compute E_dm using the forward DM model
-        # E_model_nom, E_pup = self.forward(actuators, use_vortex=True, use_wfe=False, return_pupil=True) # make sure to do the array indexing
-        # E_dm = self.forward(actuators+del_acts, use_vortex=True, use_wfe=False) # make sure to do the array indexing
-        # E_dm = E_dm - E_model_nom
-
-        E_model_nom, E_pup = self.forward(actuators, use_vortex=True, use_wfe=True, return_pupil=True) # make sure to do the array indexing
-        E_dm = self.forward(actuators+del_acts, use_vortex=True, use_wfe=True) # make sure to do the array indexing
-        E_dm = E_dm - E_model_nom
-
-        # compute the cost function
-        delE = E_ab + E_dm - E_target
-        delE_vec = delE[self.control_mask] # make sure to do array indexing
-        J_delE = delE_vec.dot(delE_vec.conjugate()).real
-        M_tik = r_cond * np.eye(self.Nacts, self.Nacts)
-        c = M_tik.dot(del_acts) # I think I am doing something wrong with M_tik
-        J_c = c.dot(c)
-        J = (J_delE + J_c) / E_ab_l2norm
-        if verbose: print(J_delE, J_c, E_ab_l2norm, J)
-
-        # Compute the gradient with the adjoint model
-        delE_masked = self.control_mask * delE # still a 2D array
-        dJ_dE_dm = 2 * delE_masked / E_ab_l2norm
-        dJ_dE_ls = props.mft_reverse(dJ_dE_dm, self.psf_pixelscale_lamD, self.nlyot)
-        dJ_dE_ls = utils.pad_or_crop(dJ_dE_ls, self.npix)
-        dJ_dE_lp = self.LYOT * dJ_dE_ls
-        # imshow2(xp.abs(dJ_dE_lp), xp.angle(dJ_dE_lp))
-
-        # Now we have to split and back-propagate the gradient along the two branches 
-        # used to model the vortex. So one branch for the FFT vortex procedure and one 
-        # for the MFT vortex procedure. 
-        dJ_dE_lp_fft = utils.pad_or_crop(copy.copy(dJ_dE_lp), self.N_vortex_lres)
-        dJ_dE_fpm_fft = xp.fft.fftshift(xp.fft.fft2(xp.fft.ifftshift(dJ_dE_lp_fft)))
-        dJ_dE_fp_fft = self.vortex_lres.conjugate() * (1 - self.lres_window) * dJ_dE_fpm_fft
-        dJ_dE_pup_fft = xp.fft.ifftshift(xp.fft.ifft2(xp.fft.fftshift(dJ_dE_fp_fft)))
-        dJ_dE_pup_fft = utils.pad_or_crop(dJ_dE_pup_fft, self.N)
-        # imshow2(xp.abs(dJ_dE_pup_fft), xp.angle(dJ_dE_pup_fft), npix=1*npix)
-
-        dJ_dE_lp_mft = utils.pad_or_crop(copy.copy(dJ_dE_lp), self.N_vortex_lres)
-        dJ_dE_fpm_mft = props.mft_forward(dJ_dE_lp_mft, self.hres_sampling*self.oversample_vortex, self.N_vortex_hres)
-        # dJ_dE_lp_mft = utils.pad_or_crop(copy.copy(dJ_dE_lp), nlyot)
-        # dJ_dE_fpm_mft = props.mft_forward(dJ_dE_lp_mft, hres_sampling, N_vortex_hres)
-        dJ_dE_fp_mft = self.vortex_hres.conjugate() * self.hres_window * dJ_dE_fpm_mft
-        # dJ_dE_pup_mft = props.mft_reverse(dJ_dE_fp_mft, hres_sampling, npix,)
-        dJ_dE_pup_mft = props.mft_reverse(dJ_dE_fp_mft, self.hres_sampling*self.oversample, self.N,)
-        # dJ_dE_pup_mft = utils.pad_or_crop(dJ_dE_pup_mft, N)
-        # imshow2(xp.abs(dJ_dE_pup_mft), xp.angle(dJ_dE_pup_mft), npix=1*npix)
-
-        dJ_dE_pup = dJ_dE_pup_fft + dJ_dE_pup_mft
-        # imshow2(xp.abs(dJ_dE_pup), xp.angle(dJ_dE_pup), npix=1*npix)
-
-        dJ_dS_dm = 4*xp.pi / self.wavelength.to_value(u.m) * xp.imag(E_pup.conjugate()/xp.sqrt(self.Imax_ref) * dJ_dE_pup)
-
-        # Now pad back to the array size fo the DM surface to back propagate through the adjoint DM model
-        dJ_dS_dm = utils.pad_or_crop(dJ_dS_dm, self.Nsurf)
-        dJ_dA = self.inf_matrix.T.dot(dJ_dS_dm.flatten())
-
-        return ensure_np_array(J), ensure_np_array(dJ_dA)
     
-def val_and_grad(del_acts, m, E_ab, r_cond, E_target=0, E_model_nom=0,  verbose=False):
+# def val_and_grad(del_acts, m, E_ab, r_cond, E_target=0, E_model_nom=0,  verbose=False):
+#     # Convert array arguments into GPU arrays if necessary
+#     E_ab = xp.array(E_ab)
+#     E_target = xp.array(E_target)
+#     E_model_nom = xp.array(E_model_nom)
+    
+#     E_ab_l2norm = E_ab[m.control_mask].dot(E_ab[m.control_mask].conjugate()).real
+
+#     # Compute E_dm using the forward DM model
+#     # E_model_nom, E_pup = self.forward(actuators, use_vortex=True, use_wfe=False, return_pupil=True) # make sure to do the array indexing
+#     # E_dm = self.forward(actuators+del_acts, use_vortex=True, use_wfe=False) # make sure to do the array indexing
+#     # E_dm = E_dm - E_model_nom
+
+#     # E_model_nom, E_pup = m.forward(actuators, use_vortex=True, use_wfe=True, return_pupil=True) # make sure to do the array indexing
+#     # E_dm = m.forward(actuators+del_acts, use_vortex=True, use_wfe=True) # make sure to do the array indexing
+#     # E_dm = E_dm - E_model_nom
+
+#     E_dm = m.forward(del_acts, use_vortex=True, use_wfe=False) # make sure to do the array indexing
+#     E_dm = E_dm - E_model_nom
+
+#     _, E_pup = m.forward(np.zeros(m.Nacts), use_vortex=True, use_wfe=True, return_pupil=True)
+
+#     # compute the cost function
+#     delE = E_ab + E_dm - E_target
+#     delE_vec = delE[m.control_mask] # make sure to do array indexing
+#     J_delE = delE_vec.dot(delE_vec.conjugate()).real
+#     # M_tik = r_cond * np.eye(m.Nacts, m.Nacts)
+#     # c = M_tik.dot(del_acts) # I think I am doing something wrong with M_tik
+#     # J_c = c.dot(c)
+#     J_c = del_acts.dot(del_acts) * r_cond**2 / (m.wavelength.to_value(u.m))**2
+#     J = (J_delE + J_c) / E_ab_l2norm
+#     if verbose: print(J_delE, J_c, E_ab_l2norm, J)
+
+#     # Compute the gradient with the adjoint model
+#     delE_masked = m.control_mask * delE # still a 2D array
+#     dJ_dE_dm = 2 * delE_masked / E_ab_l2norm
+#     dJ_dE_ls = props.mft_reverse(dJ_dE_dm, m.psf_pixelscale_lamD, m.nlyot)
+#     dJ_dE_ls = utils.pad_or_crop(dJ_dE_ls, m.npix)
+#     dJ_dE_lp = m.LYOT * dJ_dE_ls
+#     # imshow2(xp.abs(dJ_dE_lp), xp.angle(dJ_dE_lp))
+
+#     # Now we have to split and back-propagate the gradient along the two branches 
+#     # used to model the vortex. So one branch for the FFT vortex procedure and one 
+#     # for the MFT vortex procedure. 
+#     dJ_dE_lp_fft = utils.pad_or_crop(copy.copy(dJ_dE_lp), m.N_vortex_lres)
+#     dJ_dE_fpm_fft = xp.fft.fftshift(xp.fft.fft2(xp.fft.ifftshift(dJ_dE_lp_fft)))
+#     dJ_dE_fp_fft = m.vortex_lres.conjugate() * (1 - m.lres_window) * dJ_dE_fpm_fft
+#     dJ_dE_pup_fft = xp.fft.ifftshift(xp.fft.ifft2(xp.fft.fftshift(dJ_dE_fp_fft)))
+#     dJ_dE_pup_fft = utils.pad_or_crop(dJ_dE_pup_fft, m.N)
+#     # imshow2(xp.abs(dJ_dE_pup_fft), xp.angle(dJ_dE_pup_fft), npix=1*npix)
+
+#     dJ_dE_lp_mft = utils.pad_or_crop(copy.copy(dJ_dE_lp), m.N_vortex_lres)
+#     dJ_dE_fpm_mft = props.mft_forward(dJ_dE_lp_mft, m.hres_sampling*m.oversample_vortex, m.N_vortex_hres)
+#     # dJ_dE_lp_mft = utils.pad_or_crop(copy.copy(dJ_dE_lp), nlyot)
+#     # dJ_dE_fpm_mft = props.mft_forward(dJ_dE_lp_mft, hres_sampling, N_vortex_hres)
+#     dJ_dE_fp_mft = m.vortex_hres.conjugate() * m.hres_window * dJ_dE_fpm_mft
+#     # dJ_dE_pup_mft = props.mft_reverse(dJ_dE_fp_mft, hres_sampling, npix,)
+#     dJ_dE_pup_mft = props.mft_reverse(dJ_dE_fp_mft, m.hres_sampling*m.oversample, m.N,)
+#     # dJ_dE_pup_mft = utils.pad_or_crop(dJ_dE_pup_mft, N)
+#     # imshow2(xp.abs(dJ_dE_pup_mft), xp.angle(dJ_dE_pup_mft), npix=1*npix)
+
+#     dJ_dE_pup = dJ_dE_pup_fft + dJ_dE_pup_mft
+#     # imshow2(xp.abs(dJ_dE_pup), xp.angle(dJ_dE_pup), npix=1*npix)
+
+#     dJ_dS_dm = 4*xp.pi / m.wavelength.to_value(u.m) * xp.imag(E_pup.conjugate()/xp.sqrt(m.Imax_ref) * dJ_dE_pup)
+
+#     # Now pad back to the array size fo the DM surface to back propagate through the adjoint DM model
+#     dJ_dS_dm = utils.pad_or_crop(dJ_dS_dm, m.Nsurf)
+#     dJ_dA = m.inf_matrix.T.dot(dJ_dS_dm.flatten()) + xp.array( 2*del_acts * r_cond**2 / (m.wavelength.to_value(u.m))**2 )
+
+#     return ensure_np_array(J), ensure_np_array(dJ_dA)
+
+
+def val_and_grad(del_acts, m, actuators, E_ab, r_cond, verbose=False):
     # Convert array arguments into GPU arrays if necessary
     E_ab = xp.array(E_ab)
-    E_target = xp.array(E_target)
-    E_model_nom = xp.array(E_model_nom)
     
     E_ab_l2norm = E_ab[m.control_mask].dot(E_ab[m.control_mask].conjugate()).real
 
     # Compute E_dm using the forward DM model
-    # E_model_nom, E_pup = self.forward(actuators, use_vortex=True, use_wfe=False, return_pupil=True) # make sure to do the array indexing
-    # E_dm = self.forward(actuators+del_acts, use_vortex=True, use_wfe=False) # make sure to do the array indexing
-    # E_dm = E_dm - E_model_nom
-
-    # E_model_nom, E_pup = m.forward(actuators, use_vortex=True, use_wfe=True, return_pupil=True) # make sure to do the array indexing
-    # E_dm = m.forward(actuators+del_acts, use_vortex=True, use_wfe=True) # make sure to do the array indexing
-    # E_dm = E_dm - E_model_nom
-
-    E_dm = m.forward(del_acts, use_vortex=True, use_wfe=False) # make sure to do the array indexing
+    E_model_nom, E_pup = m.forward(actuators, use_vortex=True, use_wfe=True, return_pupil=True) # make sure to do the array indexing
+    E_dm = m.forward(actuators+del_acts, use_vortex=True, use_wfe=True) # make sure to do the array indexing
     E_dm = E_dm - E_model_nom
 
-    _, E_pup = m.forward(np.zeros(m.Nacts), use_vortex=True, use_wfe=True, return_pupil=True)
-
     # compute the cost function
-    delE = E_ab + E_dm - E_target
+    delE = E_ab + E_dm
     delE_vec = delE[m.control_mask] # make sure to do array indexing
     J_delE = delE_vec.dot(delE_vec.conjugate()).real
-    M_tik = r_cond * np.eye(m.Nacts, m.Nacts)
-    c = M_tik.dot(del_acts) # I think I am doing something wrong with M_tik
-    J_c = c.dot(c)
+    # M_tik = r_cond * np.eye(m.Nacts, m.Nacts)
+    # c = M_tik.dot(del_acts) # I think I am doing something wrong with M_tik
+    # J_c = c.dot(c)
+    J_c = del_acts.dot(del_acts) * r_cond**2 / (m.wavelength.to_value(u.m))**2
     J = (J_delE + J_c) / E_ab_l2norm
     if verbose: print(J_delE, J_c, E_ab_l2norm, J)
 
@@ -344,142 +342,8 @@ def val_and_grad(del_acts, m, E_ab, r_cond, E_target=0, E_model_nom=0,  verbose=
 
     # Now pad back to the array size fo the DM surface to back propagate through the adjoint DM model
     dJ_dS_dm = utils.pad_or_crop(dJ_dS_dm, m.Nsurf)
-    dJ_dA = m.inf_matrix.T.dot(dJ_dS_dm.flatten())
+    dJ_dA = m.inf_matrix.T.dot(dJ_dS_dm.flatten()) + xp.array( 2*del_acts * r_cond**2 / (m.wavelength.to_value(u.m))**2 )
 
     return ensure_np_array(J), ensure_np_array(dJ_dA)
-
-def create_poke_modes(m):
-    poke_modes = xp.zeros((m.Nacts, m.Nact, m.Nact))
-    count = 0
-    for i in range(m.Nact):
-        for j in range(m.Nact):
-            if m.dm_mask[i,j]:
-                poke_modes[count, i,j] = 1
-                count += 1
-    
-    return poke_modes
-
-def compute_jacobian(m,
-                     modes,
-                     amp=1e-9):
-    Nmodes = modes.shape[0]
-    jac = xp.zeros((2*m.Nmask, Nmodes))
-    for i in range(Nmodes):
-        m.acts = amp*modes[i][m.dm_mask]
-        E_pos = m.forward(use_wfe=True, use_vortex=True)[m.control_mask]
-        m.acts = -amp*modes[i][m.dm_mask]
-        E_neg = m.forward(use_wfe=True, use_vortex=True)[m.control_mask]
-        response = (E_pos - E_neg)/(2*amp)
-        jac[::2,i] = xp.real(response)
-        jac[1::2,i] = xp.imag(response)
-
-    return jac
-
-def beta_reg(S, beta=-1):
-    # S is the sensitivity matrix also known as the Jacobian
-    sts = xp.matmul(S.T, S)
-    rho = xp.diag(sts)
-    alpha2 = rho.max()
-
-    control_matrix = xp.matmul( xp.linalg.inv( sts + alpha2*10.0**(beta)*xp.eye(sts.shape[0]) ), S.T)
-    return control_matrix
-
-def efc(m,
-        control_matrix,  
-        Nitr=3, 
-        nominal_command=None, 
-        gain=0.5, 
-        all_ims=None, 
-        all_efs=None,
-        all_commands=None,
-        ):
-    
-    metric_images = [] if all_ims is None else all_ims
-    ef_estimates = [] if all_efs is None else all_efs
-    dm_commands = [] if all_commands is None else all_commands
-    starting_itr = len(metric_images)
-
-    total_command = copy.copy(nominal_command) if nominal_command is not None else xp.zeros((m.Nact,m.Nact))
-    del_command = xp.zeros((m.Nact,m.Nact))
-    E_ab = xp.zeros(2*m.Nmask)
-    for i in range(Nitr):
-        E_est = m.forward(use_vortex=True, use_wfe=True,)
-        E_ab[::2] = E_est.real[m.control_mask]
-        E_ab[1::2] = E_est.imag[m.control_mask]
-
-        del_acts = -gain * control_matrix.dot(E_ab)
-        del_command[m.dm_mask] = del_acts
-        total_command += del_command
-        m.acts = total_command[m.dm_mask]
-        image_ni = xp.abs(m.forward(use_vortex=True, use_wfe=True))**2
-
-        mean_ni = xp.mean(image_ni[m.control_mask])
-
-        metric_images.append(copy.copy(image_ni))
-        ef_estimates.append(copy.copy(E_ab))
-        dm_commands.append(copy.copy(total_command))
-
-        imshow3(del_command, total_command, image_ni, 
-                f'Iteration {starting_itr + i + 1:d}: $\delta$DM', 
-                'Total DM Command', 
-                f'Image\nMean NI = {mean_ni:.3e}',
-                cmap1='viridis', cmap2='viridis', 
-                pxscl3=m.psf_pixelscale_lamD, lognorm3=True, vmin3=1e-9)
-
-    return metric_images, ef_estimates, dm_commands
-
-
-def ad_efc(m, 
-        Nitr=3, 
-        nominal_command=None, 
-        reg_cond=1e-2,
-        bfgs_tol=1e-3,
-        bfgs_opts=None,
-        gain=0.5, 
-        all_ims=None, 
-        all_efs=None,
-        all_commands=None,
-        ):
-    
-    metric_images = [] if all_ims is None else all_ims
-    ef_estimates = [] if all_efs is None else all_efs
-    dm_commands = [] if all_commands is None else all_commands
-    starting_itr = len(metric_images)
-
-    total_command = copy.copy(nominal_command) if nominal_command is not None else xp.zeros((m.Nact,m.Nact))
-    del_command = xp.zeros((m.Nact,m.Nact))
-    E_ab = xp.zeros(2*m.Nmask)
-    for i in range(Nitr):
-        E_ab = m.forward(total_command[m.dm_mask], use_vortex=True, use_wfe=True,)
-        
-        del_acts0 = np.zeros(Nacts)
-        res = minimize(m.val_and_grad, 
-                        jac=True, 
-                        x0=del_acts0,
-                        args=(E_ab, E_target, E_model_nom, reg_cond), 
-                        method='L-BFGS-B',
-                        tol=bfgs_tol,
-                        options=bfgs_opts,
-                        )
-
-        del_acts = gain * res.x
-        del_command[dm_mask] = del_acts
-        total_command += del_command
-        image_ni = xp.abs(forward_model(total_command[dm_mask], use_vortex=True, use_wfe=True))**2 / I_max_ref
-
-        mean_ni = xp.mean(image_ni[control_mask])
-
-        metric_images.append(copy.copy(image_ni))
-        ef_estimates.append(copy.copy(E_ab))
-        dm_commands.append(copy.copy(total_command))
-
-        imshow3(del_command, total_command, image_ni, 
-                f'Iteration {starting_itr + i + 1:d}: $\delta$DM', 
-                'Total DM Command', 
-                f'Image\nMean NI = {mean_ni:.3e}',
-                cmap1='viridis', cmap2='viridis', 
-                pxscl3=psf_pixelscale_lamD, lognorm3=True, vmin3=1e-9)
-
-    return metric_images, ef_estimates, dm_commands
 
 
