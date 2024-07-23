@@ -209,4 +209,19 @@ def generate_wfe(diam,
 
     return wfe, mask
 
-
+def centroid(arr, rounded=False):
+    weighted_sum_x = 0
+    total_sum_x = 0
+    for i in range(arr.shape[1]):
+        weighted_sum_x += np.sum(arr[:,i])*i
+        total_sum_x += np.sum(arr[:,i])
+    xc = round(weighted_sum_x/total_sum_x) if rounded else weighted_sum_x/total_sum_x
+    
+    weighted_sum_y = 0
+    total_sum_y = 0
+    for i in range(arr.shape[0]):
+        weighted_sum_y += np.sum(arr[i,:])*i
+        total_sum_y += np.sum(arr[i,:])
+        
+    yc = round(weighted_sum_y/total_sum_y) if rounded else weighted_sum_y/total_sum_y
+    return xp.array([xc, yc])
