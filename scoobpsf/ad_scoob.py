@@ -79,18 +79,21 @@ class MODEL():
 
         # initialize physical parameters
         self.wavelength_c = 650e-9*u.m
-        self.wavelength = 650e-9*u.m
         self.pupil_diam = 9.4*u.mm
         self.dm_beam_diam = 9.4*u.mm
         self.lyot_stop_diam = 8.6*u.mm
         self.lyot_ratio = 8.6/9.4
-        self.im_fl = 280*u.mm
-        self.um_per_lamD = (self.wavelength_c*self.im_fl/(self.lyot_stop_diam)).to(u.um)
-        self.psf_pixelscale = 3.76*u.um/u.pix
-        self.psf_pixelscale_lamD = (self.psf_pixelscale / self.um_per_lamD).decompose().value
-        self.Imax_ref = 1
-
         self.crad = 34/2 * 9.4/10.2 * 8.6/9.4
+        # self.im_fl = 280*u.mm
+        # self.um_per_lamD = (self.wavelength_c*self.im_fl/(self.lyot_stop_diam)).to(u.um)
+        # self.psf_pixelscale = 3.76*u.um/u.pix
+        # self.psf_pixelscale_lamD = (self.psf_pixelscale / self.um_per_lamD).decompose().value
+        self.psf_pixelscale_lamDc = 0.17
+        self.psf_pixelscale_lamD = self.psf_pixelscale_lamDc
+
+        self.wavelength = 650e-9*u.m
+
+        self.Imax_ref = 1
 
         # initialize sampling parameters and load masks
         self.npix = 1000
@@ -110,7 +113,6 @@ class MODEL():
 
         # initialize DM parameters
         self.Nact = 34
-        self.Nacts = 952
         self.act_spacing = 0.3*u.mm
         self.inf_sampling = (self.npix/self.dm_beam_diam * self.act_spacing).value
 
@@ -119,6 +121,9 @@ class MODEL():
                                              coupling=0.15,)
         self.Nsurf = self.inf_fun.shape[0]
         self.dm_mask = make_dm_mask(self.Nact)
+        self.Nacts = int(self.dm_mask.sum())
+        # if dead_acts 
+
         # self.inf_matrix = make_inf_matrix(self.inf_fun, self.inf_sampling, self.dm_mask)
 
         self.inf_fun_fft = xp.fft.fftshift(xp.fft.fft2(xp.fft.ifftshift(self.inf_fun,)))
@@ -176,6 +181,7 @@ class MODEL():
     @wavelength.setter
     def wavelength(self, wl):
         self._wavelength = wl
+        self.psf_pixelscale_lamD = self.psf_pixelscale_lamDc * (self.wavelength_c/wl).decompose().value
 
     def create_control_mask(self):
         x = (xp.linspace(-self.npsf/2, self.npsf/2-1, self.npsf) + 1/2)*self.psf_pixelscale_lamD
@@ -187,7 +193,7 @@ class MODEL():
         self.control_mask = _scipy.ndimage.rotate(control_mask, self.dh_rotation, reshape=False, order=0)
         self.Nmask = int(control_mask.sum())
 
-    def forward(self, actuators, use_vortex=True, use_wfe=False, return_pupil=False):
+    def forward(self, actuators, use_vortex=True, use_wfe=True, return_pupil=False):
         # dm_surf = self.inf_matrix.dot(xp.array(actuators)).reshape(self.Nsurf,self.Nsurf)
         dm_command = xp.zeros((self.Nact,self.Nact))
         dm_command[self.dm_mask] = xp.array(actuators)
@@ -236,73 +242,11 @@ class MODEL():
             return fpwf, E_pup
         else:
             return fpwf
-    
-# def val_and_grad(del_acts, m, E_ab, r_cond, E_target=0, E_model_nom=0,  verbose=False):
-#     # Convert array arguments into GPU arrays if necessary
-#     E_ab = xp.array(E_ab)
-#     E_target = xp.array(E_target)
-#     E_model_nom = xp.array(E_model_nom)
-    
-#     E_ab_l2norm = E_ab[m.control_mask].dot(E_ab[m.control_mask].conjugate()).real
+        
+    def snap(self, actuators, use_vortex=True, use_wfe=True,):
+        return xp.abs(self.forward(actuators, use_vortex=use_vortex, use_wfe=use_wfe,))**2
 
-#     # Compute E_dm using the forward DM model
-#     E_dm = m.forward(del_acts, use_vortex=True, use_wfe=False) # make sure to do the array indexing
-#     E_dm = E_dm - E_model_nom
-
-#     _, E_pup = m.forward(np.zeros(m.Nacts), use_vortex=True, use_wfe=True, return_pupil=True)
-
-#     # compute the cost function
-#     delE = E_ab + E_dm - E_target
-#     delE_vec = delE[m.control_mask] # make sure to do array indexing
-#     J_delE = delE_vec.dot(delE_vec.conjugate()).real
-#     # M_tik = r_cond * np.eye(m.Nacts, m.Nacts)
-#     # c = M_tik.dot(del_acts) # I think I am doing something wrong with M_tik
-#     # J_c = c.dot(c)
-#     J_c = del_acts.dot(del_acts) * r_cond**2 / (m.wavelength.to_value(u.m))**2
-#     J = (J_delE + J_c) / E_ab_l2norm
-#     if verbose: print(J_delE, J_c, E_ab_l2norm, J)
-
-#     # Compute the gradient with the adjoint model
-#     delE_masked = m.control_mask * delE # still a 2D array
-#     dJ_dE_dm = 2 * delE_masked / E_ab_l2norm
-#     dJ_dE_ls = props.mft_reverse(dJ_dE_dm, m.psf_pixelscale_lamD, m.nlyot)
-#     dJ_dE_ls = utils.pad_or_crop(dJ_dE_ls, m.npix)
-#     dJ_dE_lp = m.LYOT * dJ_dE_ls
-#     # imshow2(xp.abs(dJ_dE_lp), xp.angle(dJ_dE_lp))
-
-#     # Now we have to split and back-propagate the gradient along the two branches 
-#     # used to model the vortex. So one branch for the FFT vortex procedure and one 
-#     # for the MFT vortex procedure. 
-#     dJ_dE_lp_fft = utils.pad_or_crop(copy.copy(dJ_dE_lp), m.N_vortex_lres)
-#     dJ_dE_fpm_fft = xp.fft.fftshift(xp.fft.fft2(xp.fft.ifftshift(dJ_dE_lp_fft)))
-#     dJ_dE_fp_fft = m.vortex_lres.conjugate() * (1 - m.lres_window) * dJ_dE_fpm_fft
-#     dJ_dE_pup_fft = xp.fft.ifftshift(xp.fft.ifft2(xp.fft.fftshift(dJ_dE_fp_fft)))
-#     dJ_dE_pup_fft = utils.pad_or_crop(dJ_dE_pup_fft, m.N)
-#     # imshow2(xp.abs(dJ_dE_pup_fft), xp.angle(dJ_dE_pup_fft), npix=1*npix)
-
-#     dJ_dE_lp_mft = utils.pad_or_crop(copy.copy(dJ_dE_lp), m.N_vortex_lres)
-#     dJ_dE_fpm_mft = props.mft_forward(dJ_dE_lp_mft, m.hres_sampling*m.oversample_vortex, m.N_vortex_hres)
-#     # dJ_dE_lp_mft = utils.pad_or_crop(copy.copy(dJ_dE_lp), nlyot)
-#     # dJ_dE_fpm_mft = props.mft_forward(dJ_dE_lp_mft, hres_sampling, N_vortex_hres)
-#     dJ_dE_fp_mft = m.vortex_hres.conjugate() * m.hres_window * dJ_dE_fpm_mft
-#     # dJ_dE_pup_mft = props.mft_reverse(dJ_dE_fp_mft, hres_sampling, npix,)
-#     dJ_dE_pup_mft = props.mft_reverse(dJ_dE_fp_mft, m.hres_sampling*m.oversample, m.N,)
-#     # dJ_dE_pup_mft = utils.pad_or_crop(dJ_dE_pup_mft, N)
-#     # imshow2(xp.abs(dJ_dE_pup_mft), xp.angle(dJ_dE_pup_mft), npix=1*npix)
-
-#     dJ_dE_pup = dJ_dE_pup_fft + dJ_dE_pup_mft
-#     # imshow2(xp.abs(dJ_dE_pup), xp.angle(dJ_dE_pup), npix=1*npix)
-
-#     dJ_dS_dm = 4*xp.pi / m.wavelength.to_value(u.m) * xp.imag(E_pup.conjugate()/xp.sqrt(m.Imax_ref) * dJ_dE_pup)
-
-#     # Now pad back to the array size fo the DM surface to back propagate through the adjoint DM model
-#     dJ_dS_dm = utils.pad_or_crop(dJ_dS_dm, m.Nsurf)
-#     dJ_dA = m.inf_matrix.T.dot(dJ_dS_dm.flatten()) + xp.array( 2*del_acts * r_cond**2 / (m.wavelength.to_value(u.m))**2 )
-
-#     return ensure_np_array(J), ensure_np_array(dJ_dA)
-
-
-def val_and_grad(del_acts, m, actuators, E_ab, r_cond, verbose=False):
+def val_and_grad(del_acts, m, actuators, E_ab, r_cond, dead_acts=None, verbose=False):
     # Convert array arguments into GPU arrays if necessary
     E_ab = xp.array(E_ab)
     
@@ -365,6 +309,78 @@ def val_and_grad(del_acts, m, actuators, E_ab, r_cond, verbose=False):
     x1_bar = m.inf_fun_fft.conjugate() * x2_bar
     dJ_dA = m.Mx_back@x1_bar@m.My_back / ( m.Nsurf * m.Nact * m.Nact ) # why I have to divide by this constant is beyond me
     dJ_dA = dJ_dA[m.dm_mask].real + xp.array( 2*del_acts * r_cond / (m.wavelength.to_value(u.m))**2 )
+
+    if dead_acts is not None: 
+        dJ_dA[dead_acts] = 0
+
+    return ensure_np_array(J), ensure_np_array(dJ_dA)
+
+def val_and_grad_bb(del_acts, m, actuators, E_ab, r_cond, dead_acts=None, verbose=False):
+    # Convert array arguments into GPU arrays if necessary
+    E_ab = xp.array(E_ab)
+    
+    E_ab_l2norm = E_ab[m.control_mask].dot(E_ab[m.control_mask].conjugate()).real
+
+    # Compute E_dm using the forward DM model
+    E_model_nom, E_pup = m.forward(actuators, use_vortex=True, use_wfe=True, return_pupil=True) # make sure to do the array indexing
+    E_dm = m.forward(actuators+del_acts, use_vortex=True, use_wfe=True) # make sure to do the array indexing
+    E_dm = E_dm - E_model_nom
+
+    # compute the cost function
+    delE = E_ab + E_dm
+    delE_vec = delE[m.control_mask] # make sure to do array indexing
+    J_delE = delE_vec.dot(delE_vec.conjugate()).real
+    # M_tik = r_cond * np.eye(m.Nacts, m.Nacts)
+    # c = M_tik.dot(del_acts) # I think I am doing something wrong with M_tik
+    # J_c = c.dot(c)
+    J_c = del_acts.dot(del_acts) * r_cond / (m.wavelength.to_value(u.m))**2
+    J = (J_delE + J_c) / E_ab_l2norm
+    if verbose: print(J_delE, J_c, E_ab_l2norm, J)
+
+    # Compute the gradient with the adjoint model
+    delE_masked = m.control_mask * delE # still a 2D array
+    delE_masked = _scipy.ndimage.rotate(delE_masked, -m.det_rotation, reshape=False, order=5)
+    dJ_dE_dm = 2 * delE_masked / E_ab_l2norm
+    dJ_dE_ls = props.mft_reverse(dJ_dE_dm, m.psf_pixelscale_lamD, m.nlyot)
+    dJ_dE_ls = utils.pad_or_crop(dJ_dE_ls, m.npix)
+    dJ_dE_lp = m.LYOT * dJ_dE_ls
+    # imshow2(xp.abs(dJ_dE_lp), xp.angle(dJ_dE_lp))
+
+    # Now we have to split and back-propagate the gradient along the two branches 
+    # used to model the vortex. So one branch for the FFT vortex procedure and one 
+    # for the MFT vortex procedure. 
+    dJ_dE_lp_fft = utils.pad_or_crop(copy.copy(dJ_dE_lp), m.N_vortex_lres)
+    dJ_dE_fpm_fft = xp.fft.fftshift(xp.fft.fft2(xp.fft.ifftshift(dJ_dE_lp_fft)))
+    dJ_dE_fp_fft = m.vortex_lres.conjugate() * (1 - m.lres_window) * dJ_dE_fpm_fft
+    dJ_dE_pup_fft = xp.fft.ifftshift(xp.fft.ifft2(xp.fft.fftshift(dJ_dE_fp_fft)))
+    dJ_dE_pup_fft = utils.pad_or_crop(dJ_dE_pup_fft, m.N)
+    # imshow2(xp.abs(dJ_dE_pup_fft), xp.angle(dJ_dE_pup_fft), npix=1*npix)
+
+    dJ_dE_lp_mft = utils.pad_or_crop(copy.copy(dJ_dE_lp), m.N_vortex_lres)
+    dJ_dE_fpm_mft = props.mft_forward(dJ_dE_lp_mft, m.hres_sampling*m.oversample_vortex, m.N_vortex_hres)
+    # dJ_dE_lp_mft = utils.pad_or_crop(copy.copy(dJ_dE_lp), nlyot)
+    # dJ_dE_fpm_mft = props.mft_forward(dJ_dE_lp_mft, hres_sampling, N_vortex_hres)
+    dJ_dE_fp_mft = m.vortex_hres.conjugate() * m.hres_window * dJ_dE_fpm_mft
+    # dJ_dE_pup_mft = props.mft_reverse(dJ_dE_fp_mft, hres_sampling, npix,)
+    dJ_dE_pup_mft = props.mft_reverse(dJ_dE_fp_mft, m.hres_sampling*m.oversample, m.N,)
+    # dJ_dE_pup_mft = utils.pad_or_crop(dJ_dE_pup_mft, N)
+    # imshow2(xp.abs(dJ_dE_pup_mft), xp.angle(dJ_dE_pup_mft), npix=1*npix)
+
+    dJ_dE_pup = dJ_dE_pup_fft + dJ_dE_pup_mft
+    # imshow2(xp.abs(dJ_dE_pup), xp.angle(dJ_dE_pup), npix=1*npix)
+
+    dJ_dS_dm = 4*xp.pi / m.wavelength.to_value(u.m) * xp.imag(E_pup.conjugate()/xp.sqrt(m.Imax_ref) * dJ_dE_pup)
+
+    # Now pad back to the array size fo the DM surface to back propagate through the adjoint DM model
+    dJ_dS_dm = utils.pad_or_crop(dJ_dS_dm, m.Nsurf)
+    # dJ_dA = m.inf_matrix.T.dot(dJ_dS_dm.flatten()) + xp.array( 2*del_acts * r_cond**2 / (m.wavelength.to_value(u.m))**2 )
+    x2_bar = xp.fft.fftshift(xp.fft.fft2(xp.fft.ifftshift(dJ_dS_dm.real)))
+    x1_bar = m.inf_fun_fft.conjugate() * x2_bar
+    dJ_dA = m.Mx_back@x1_bar@m.My_back / ( m.Nsurf * m.Nact * m.Nact ) # why I have to divide by this constant is beyond me
+    dJ_dA = dJ_dA[m.dm_mask].real + xp.array( 2*del_acts * r_cond / (m.wavelength.to_value(u.m))**2 )
+
+    if dead_acts is not None: 
+        dJ_dA[dead_acts] = 0
 
     return ensure_np_array(J), ensure_np_array(dJ_dA)
 
