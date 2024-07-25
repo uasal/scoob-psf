@@ -45,17 +45,37 @@ def move_psf(x_pos, y_pos):
         scoob_utils.move_relative(client0, 'stagepiezo.stagepupil_y_pos', y_pos)
         time.sleep(0.25)
 
-def set_zwo_roi(xc, yc, npix):
+def set_zwo_roi(xc, yc, npix, delay=0.25):
     # update roi parameters
     client0.wait_for_properties(['scicam.roi_region_x', 'scicam.roi_region_y', 'scicam.roi_region_h' ,'scicam.roi_region_w', 'scicam.roi_set'])
     client0['scicam.roi_region_x.target'] = xc
     client0['scicam.roi_region_y.target'] = yc
     client0['scicam.roi_region_h.target'] = npix
     client0['scicam.roi_region_w.target'] = npix
-    time.sleep(1)
+    time.sleep(delay)
     client0['scicam.roi_set.request'] = purepyindi.SwitchState.ON
-    time.sleep(1)
-    
+    time.sleep(delay)
+
+def set_zwo_exp_time(exp_time, delay=0.1):
+    client0.wait_for_properties(['scicam.exptime'])
+    client0['scicam.exptime.target'] = exp_time
+    time.sleep(delay)
+
+def get_zwo_exp_time():
+    client0.wait_for_properties(['scicam.exptime'])
+    return client0['scicam.exptime.current']
+
+def set_fib_atten(value, delay=0.1):
+    client['fiberatten.atten.target'] = value
+    time.sleep(delay)
+
+def get_fib_atten():
+    return client['fiberatten.atten.target']
+
+
+def move_stage(value):
+    client['stag']
+
 def move_pol(rel_pos): # this will change the throughput by rotating the polarizer
     # FIXME
     utils.move_relative(client, 'stagepiezo.stagepol', rel_pos)
@@ -82,13 +102,9 @@ class SCOOBI():
                  normalize=True, 
                  Imax_ref=None,
                 ):
-        
-        # FIXME: make the science camera such that it can be specified
+        # I need to subrtract dark frames 
+        # and account for negative pixels in the dark subtracted frames
 
-        # FIXME: add functionality to automatically subtract dark frames from newly captured frames
-
-        self.is_model = False
-        
         self.wavelength_c = 633e-9*u.m
         
         self.CAM = ImageStream(cam_channel)
@@ -96,6 +112,8 @@ class SCOOBI():
         self.dm_channel = dm_channel
         self.DM = scoob_utils.connect_to_dmshmim(channel=dm_channel) # channel used for writing to DM
         self.DMT = scoob_utils.connect_to_dmshmim(channel='dm00disp') # the total shared memory image
+
+        self.dm_delay = 0.1
 
         # Init all DM settings
         self.Nact = 34
@@ -105,7 +123,6 @@ class SCOOBI():
         self.dm_active_diam = 10.2*u.mm
         self.dm_full_diam = 11.1*u.mm
         self.full_stroke = 1.5e-6*u.m
-        
         self.dm_ref = dm_ref
         self.dm_gain = 1
         self.reset_dm()
@@ -125,7 +142,7 @@ class SCOOBI():
 
         # Init camera settings
         self.psf_pixelscale = 3.76e-6*u.m/u.pix
-        self.psf_pixelscale_lamD = 0.2711864406779661
+        self.psf_pixelscale_lamD = 0.17
         self.Nframes = Nframes
         
         self.npsf = npsf
@@ -136,69 +153,17 @@ class SCOOBI():
         self.exp_time = exp_time
         self.attenuation = attenuation
 
-        self.att_ref = None
+        self.subtract_bias = False
+        self.return_ni = False
 
-        self.normalize = normalize
-        self.Imax_ref = Imax_ref
+        self.Imax_ref = 1
+        self.att_ref = 1
+        self.texp_ref = 1
+        self.gain_ref = 1
         
         self.x_shift = x_shift
         self.y_shift = y_shift
 
-        self.subtract_bias = False
-
-        self.exp_times = None
-        self.Nframes_per_exp = None
-
-        self.exp_time_delay = 0.1
-        self.attenuation_delay = 0.1
-        self.dm_delay = 0.01
-    
-    # @property
-    # def bias(self):
-    #     return self._bias
-
-    # @bias.setter
-    # def bias(self, value):
-    #     client['nsv571.blacklevel.blacklevel'] = value
-    #     time.sleep(0.5)
-    #     self._bias = value
-
-    @property
-    def exp_time(self):
-        return self._exp_time
-
-    @exp_time.setter
-    def exp_time(self, value):
-        client.get_properties()
-        # client['nsv571.exptime.exptime'] = value.to_value(u.s)
-        # time.sleep(0.5)
-        # self._exp_time = value
-        client0.wait_for_properties(['scicam_2600.exptime'])
-        client0['scicam_2600.exptime.target'] = value.to_value(u.s)
-        time.sleep(self.exp_time_delay)
-        self._exp_time = client0['scicam_2600.exptime.current'] * u.s 
-        
-    # @property
-    # def gain(self):
-    #     return self._gain
-
-    # @gain.setter
-    # def gain(self, value):
-    #     if value>10 or value<1:
-    #         raise ValueError('Gain value cannot be greater than 10 or less than 1.')
-    #     client['nsv571.gain.gain']= value
-    #     time.sleep(0.5)
-    #     self._gain = value
-
-    @property
-    def attenuation(self):
-        return self._attenuation
-    
-    @attenuation.setter
-    def attenuation(self, value):
-        client['fiberatten.atten.target'] = value
-        time.sleep(self.attenuation_delay)
-        self._attenuation = value
 
     def zero_dm(self):
         self.DM.write(np.zeros(self.dm_shape))
@@ -230,11 +195,7 @@ class SCOOBI():
         self.DM.close()
 
     def normalize(self, image):
-
-        im *= (1/self.gain) * 10**(self.attenuation/10) * (1/self.exp_time.to_value(u.s))
-        if self.Imax_ref is not None:
-            im /= self.Imax_ref
-
+        image_ni = image/self.Imax_ref * (self.texp_ref/self.texp) * 10**((self.att-self.att_ref)/10)  # * (self.gain_ref/self.gain)
         return image_ni
 
     def snap(self, normalize=False, plot=False, vmin=None):
@@ -251,11 +212,8 @@ class SCOOBI():
         if self.subtract_bias:
             im -= self.bias
             
-        if self.normalize:
-            self.normalize(im)
-            
-        if plot:
-            imshows.imshow1(im, lognorm=True, pxscl=self.psf_pixelscale_lamD, grid=True, vmin=vmin)
+        if self.return_ni:
+            im = self.normalize(im)
         
         return im
     
