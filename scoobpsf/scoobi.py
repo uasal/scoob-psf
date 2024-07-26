@@ -27,6 +27,16 @@ def move_psf(x_pos, y_pos, client):
     scoob_utils.move_relative(client, 'stagepiezo.stagepupil_y_pos', y_pos)
     time.sleep(0.25)
 
+def move_block_in(client, delay=2):
+    client.wait_for_properties(['stagelinear.presetName'])
+    client['stagelinear.presetName.block_in'] = purepyindi.SwitchState.ON
+    time.sleep(delay)
+
+def move_block_out(client, delay=2):
+    client.wait_for_properties(['stagelinear.presetName'])
+    client['stagelinear.presetName.block_out'] = purepyindi.SwitchState.ON
+    time.sleep(delay)
+
 def set_zwo_roi(xc, yc, npix, client, delay=0.25):
     # update roi parameters
     client.wait_for_properties(['scicam.roi_region_x', 'scicam.roi_region_y', 'scicam.roi_region_h' ,'scicam.roi_region_w', 'scicam.roi_set'])
@@ -164,15 +174,6 @@ class SCOOBI():
         self.gain = gain
         print(f'Set the ZWO gain setting to {gain:.1f}')
 
-    def take_dark(self, client, delay=0.5):
-        client.wait_for_properties(['fiberatten.atten'])
-        client['stagelinear.presetName.block_in'] = purepyindi.SwitchState.ON
-        time.sleep(delay)
-        self.df = self.snap()
-        client.wait_for_properties(['fiberatten.atten'])
-        client['stagelinear.presetName.block_out'] = purepyindi.SwitchState.ON
-        time.sleep(delay)
-
     def zero_dm(self):
         self.DM.write(np.zeros(self.dm_shape))
         time.sleep(self.dm_delay)
@@ -220,6 +221,7 @@ class SCOOBI():
 
         if self.subtract_dark and self.df is not None:
             im -= self.df
+            im[im<0] = 0.0
             
         if self.return_ni:
             im = self.normalize(im)
