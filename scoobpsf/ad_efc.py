@@ -150,7 +150,6 @@ def sim_pwp(m, current_acts,
         
     E_est_2d = xp.zeros((m.npsf,m.npsf), dtype=xp.complex128)
     E_est_2d[m.control_mask] = E_est
-    # xp.place(E_est_2d, mask=control_mask, vals=E_est)
     
     if plot or plot_est:
         I_est = xp.abs(E_est_2d)**2
@@ -193,7 +192,7 @@ def run_pwp(sysi, m, current_acts,
     for i in range(Nprobes):
         if i==0: 
             E_nom = m.forward(current_acts, use_vortex=True, use_wfe=True)
-        E_with_probe = m.forward(current_acts + probe_amp*probes[i], use_vortex=True, use_wfe=True)
+        E_with_probe = m.forward(xp.array(current_acts) + xp.array(probe_amp*probes[i])[m.dm_mask], use_vortex=True, use_wfe=True)
         E_probe = E_with_probe - E_nom
 
         if plot:
@@ -218,12 +217,16 @@ def run_pwp(sysi, m, current_acts,
         E_est[i] = est[0] + 1j*est[1]
         
     E_est_2d = xp.zeros((sysi.npsf,sysi.npsf), dtype=xp.complex128)
-    xp.place(E_est_2d, mask=control_mask, vals=E_est)
-    
+    E_est_2d[control_mask] = E_est
+
     if plot or plot_est:
-        imshow2(xp.abs(E_est_2d)**2, xp.angle(E_est_2d), 
+        I_est = xp.abs(E_est_2d)**2
+        P_est = xp.angle(E_est_2d)
+        imshow2(I_est, P_est, 
                 'Estimated Intensity', 'Estimated Phase',
-                lognorm1=True, pxscl=sysi.psf_pixelscale_lamD)
+                lognorm1=True, vmin1=xp.max(I_est)/1e4, 
+                cmap2='twilight',
+                pxscl=m.psf_pixelscale_lamD)
     return E_est_2d
 
 
