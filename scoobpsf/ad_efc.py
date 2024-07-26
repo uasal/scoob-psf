@@ -96,7 +96,139 @@ def efc(m,
 
     return metric_images, ef_estimates, dm_commands
 
+def sim_pwp(m, current_acts, 
+            probes, probe_amp, 
+            reg_cond=1e-3, 
+            plot=False,
+            plot_est=False):
+    
+    Nmask = int(m.control_mask.sum())
+    Nprobes = probes.shape[0]
+
+    Ip = []
+    In = []
+    for i in range(Nprobes):
+        for s in [-1, 1]:
+            coro_im = m.snap(current_acts + s*probe_amp*probes[i][m.dm_mask], use_vortex=True, use_wfe=True)
+
+            if s==-1: 
+                In.append(coro_im)
+            else: 
+                Ip.append(coro_im)
+            
+        if plot:
+            imshow3(Ip[i], In[i], Ip[i]-In[i], lognorm1=True, lognorm2=True, pxscl=m.psf_pixelscale_lamD)
+            
+    E_probes = xp.zeros((probes.shape[0], 2*Nmask))
+    I_diff = xp.zeros((probes.shape[0], Nmask))
+    for i in range(Nprobes):
+        if i==0: 
+            E_nom = m.forward(current_acts, use_vortex=True, use_wfe=True)
+        E_with_probe = m.forward(current_acts + probe_amp*probes[i][m.dm_mask], use_vortex=True, use_wfe=True)
+        E_probe = E_with_probe - E_nom
+
+        if plot:
+            imshow2(xp.abs(E_probe), xp.angle(E_probe),
+                    f'Probe {i+1}: '+'$|E_{probe}|$', f'Probe {i+1}: '+r'$\angle E_{probe}$')
+            
+        E_probes[i, ::2] = E_probe[m.control_mask].real
+        E_probes[i, 1::2] = E_probe[m.control_mask].imag
+
+        # I_diff[i:(i+1), :] = (Ip[i] - In[i])[control_mask]
+        I_diff[i, :] = (Ip[i] - In[i])[m.control_mask]
+    
+    # Use batch process to estimate each pixel individually
+    E_est = xp.zeros(Nmask, dtype=xp.complex128)
+    for i in range(Nmask):
+        delI = I_diff[:, i]
+        M = 4*xp.array([E_probes[:,2*i], E_probes[:,2*i + 1]]).T
+        Minv = xp.linalg.pinv(M.T@M, reg_cond)@M.T
+    
+        est = Minv.dot(delI)
+
+        E_est[i] = est[0] + 1j*est[1]
+        
+    E_est_2d = xp.zeros((m.npsf,m.npsf), dtype=xp.complex128)
+    E_est_2d[m.control_mask] = E_est
+    # xp.place(E_est_2d, mask=control_mask, vals=E_est)
+    
+    if plot or plot_est:
+        I_est = xp.abs(E_est_2d)**2
+        P_est = xp.angle(E_est_2d)
+        imshow2(I_est, P_est, 
+                'Estimated Intensity', 'Estimated Phase',
+                lognorm1=True, vmin1=xp.max(I_est)/1e4, 
+                cmap2='twilight',
+                pxscl=m.psf_pixelscale_lamD)
+    return E_est_2d
+
+def run_pwp(sysi, m, current_acts, 
+            control_mask, 
+            probes, probe_amp, 
+            reg_cond=1e-3, 
+            plot=False,
+            plot_est=False):
+    
+    Nmask = int(control_mask.sum())
+    Nprobes = probes.shape[0]
+
+    Ip = []
+    In = []
+    for i in range(Nprobes):
+        for s in [-1, 1]:
+            sysi.add_dm(s*probe_amp*probes[i])
+            coro_im = sysi.snap()
+            sysi.add_dm(-s*probe_amp*probes[i]) # remove probe from DM
+
+            if s==-1: 
+                In.append(coro_im)
+            else: 
+                Ip.append(coro_im)
+            
+        if plot:
+            imshow3(Ip[i], In[i], Ip[i]-In[i], lognorm1=True, lognorm2=True, pxscl=sysi.psf_pixelscale_lamD)
+            
+    E_probes = xp.zeros((probes.shape[0], 2*Nmask))
+    I_diff = xp.zeros((probes.shape[0], Nmask))
+    for i in range(Nprobes):
+        if i==0: 
+            E_nom = m.forward(current_acts, use_vortex=True, use_wfe=True)
+        E_with_probe = m.forward(current_acts + probe_amp*probes[i], use_vortex=True, use_wfe=True)
+        E_probe = E_with_probe - E_nom
+
+        if plot:
+            imshow2(xp.abs(E_probe), xp.angle(E_probe),
+                    f'Probe {i+1}: '+'$|E_{probe}|$', f'Probe {i+1}: '+r'$\angle E_{probe}$')
+            
+        E_probes[i, ::2] = E_probe[control_mask].real
+        E_probes[i, 1::2] = E_probe[control_mask].imag
+
+        # I_diff[i:(i+1), :] = (Ip[i] - In[i])[control_mask]
+        I_diff[i, :] = (Ip[i] - In[i])[control_mask]
+    
+    # Use batch process to estimate each pixel individually
+    E_est = xp.zeros(Nmask, dtype=xp.complex128)
+    for i in range(Nmask):
+        delI = I_diff[:, i]
+        M = 4*xp.array([E_probes[:,2*i], E_probes[:,2*i + 1]]).T
+        Minv = xp.linalg.pinv(M.T@M, reg_cond)@M.T
+    
+        est = Minv.dot(delI)
+
+        E_est[i] = est[0] + 1j*est[1]
+        
+    E_est_2d = xp.zeros((sysi.npsf,sysi.npsf), dtype=xp.complex128)
+    xp.place(E_est_2d, mask=control_mask, vals=E_est)
+    
+    if plot or plot_est:
+        imshow2(xp.abs(E_est_2d)**2, xp.angle(E_est_2d), 
+                'Estimated Intensity', 'Estimated Phase',
+                lognorm1=True, pxscl=sysi.psf_pixelscale_lamD)
+    return E_est_2d
+
+
 def sim(m, val_and_grad,
+        est_fun=None, est_params=None,
         Nitr=3, 
         reg_cond=1e-2,
         bfgs_tol=1e-3,
@@ -116,7 +248,10 @@ def sim(m, val_and_grad,
     del_command = xp.zeros((m.Nact,m.Nact))
     del_acts0 = np.zeros(m.Nacts)
     for i in range(Nitr):
-        E_ab = m.forward(total_command[m.dm_mask], use_vortex=True, use_wfe=True,)
+        if est_fun is None: 
+            E_ab = m.forward(total_command[m.dm_mask], use_vortex=True, use_wfe=True,)
+        else: 
+            E_ab = est_fun(m, total_command[m.dm_mask], **est_params)
 
         res = minimize(val_and_grad, 
                        jac=True, 

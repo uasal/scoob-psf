@@ -78,20 +78,17 @@ class MODEL():
     def __init__(self):
 
         # initialize physical parameters
-        self.wavelength_c = 650e-9*u.m
-        self.pupil_diam = 9.4*u.mm
-        self.dm_beam_diam = 9.4*u.mm
+        self.wavelength_c = 633e-9*u.m
+        self.pupil_diam = 9.1*u.mm
+        self.dm_beam_diam = 9.1*u.mm
         self.lyot_stop_diam = 8.6*u.mm
-        self.lyot_ratio = 8.6/9.4
-        self.crad = 34/2 * 9.4/10.2 * 8.6/9.4
-        # self.im_fl = 280*u.mm
-        # self.um_per_lamD = (self.wavelength_c*self.im_fl/(self.lyot_stop_diam)).to(u.um)
-        # self.psf_pixelscale = 3.76*u.um/u.pix
-        # self.psf_pixelscale_lamD = (self.psf_pixelscale / self.um_per_lamD).decompose().value
-        self.psf_pixelscale_lamDc = 0.17
+        self.lyot_ratio = 8.6/9.1
+        self.crad = 34/2 * 9.1/10.2 * 8.6/9.1
+        # self.psf_pixelscale_lamDc = 0.17
+        self.psf_pixelscale_lamDc = 0.303
         self.psf_pixelscale_lamD = self.psf_pixelscale_lamDc
 
-        self.wavelength = 650e-9*u.m
+        self.wavelength = 633e-9*u.m
 
         self.Imax_ref = 1
 
