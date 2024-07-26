@@ -71,7 +71,7 @@ def make_inf_matrix(inf_fun, inf_sampling, dm_mask):
 def acts_to_command(acts, dm_mask):
     Nact = dm_mask.shape[0]
     command = xp.zeros((Nact,Nact))
-    command[dm_mask] = acts
+    command[dm_mask] = xp.array(acts)
     return command
 
 class MODEL():
@@ -236,7 +236,7 @@ class MODEL():
         wf = utils.pad_or_crop(wf, self.nlyot)
         fpwf = props.mft_forward(wf, self.psf_pixelscale_lamD, self.npsf) / xp.sqrt(self.Imax_ref)
 
-        fpwf = _scipy.ndimage.rotate(fpwf, self.det_rotation, reshape=False, order=3)
+        fpwf = _scipy.ndimage.rotate(fpwf, self.det_rotation, reshape=False, order=5)
 
         if return_pupil:
             return fpwf, E_pup
@@ -247,7 +247,8 @@ class MODEL():
         return xp.abs(self.forward(actuators, use_vortex=use_vortex, use_wfe=use_wfe,))**2
 
 def val_and_grad(del_acts, m, actuators, E_ab, r_cond, dead_acts=None, verbose=False):
-    # Convert array arguments into GPU arrays if necessary
+    # Convert array arguments into correct types
+    actuators = ensure_np_array(actuators)
     E_ab = xp.array(E_ab)
     
     E_ab_l2norm = E_ab[m.control_mask].dot(E_ab[m.control_mask].conjugate()).real
@@ -261,9 +262,6 @@ def val_and_grad(del_acts, m, actuators, E_ab, r_cond, dead_acts=None, verbose=F
     delE = E_ab + E_dm
     delE_vec = delE[m.control_mask] # make sure to do array indexing
     J_delE = delE_vec.dot(delE_vec.conjugate()).real
-    # M_tik = r_cond * np.eye(m.Nacts, m.Nacts)
-    # c = M_tik.dot(del_acts) # I think I am doing something wrong with M_tik
-    # J_c = c.dot(c)
     J_c = del_acts.dot(del_acts) * r_cond / (m.wavelength.to_value(u.m))**2
     J = (J_delE + J_c) / E_ab_l2norm
     if verbose: print(J_delE, J_c, E_ab_l2norm, J)

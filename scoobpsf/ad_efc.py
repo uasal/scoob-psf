@@ -106,40 +106,6 @@ def sim(m, val_and_grad,
         all_efs=[],
         all_commands=[],
         ):
-    """_summary_
-
-    Parameters
-    ----------
-    m : object
-        The model of the coronagraph
-    val_and_grad : function
-        The function used to compute the cost-function value and the 
-        gradient with respect to DM actuators
-    Nitr : int, optional
-        Number of EFC iterations, by default 3
-    nominal_command : np.ndarray, optional
-        the initial command to begin with, by default None
-    reg_cond : float, optional
-        Tikhonov regularization parameter being used for EFC, by default 1e-2
-    bfgs_tol : float, optional
-        BFGS tolerance, by default 1e-3
-    bfgs_opts : dict, optional
-        Dictionary of options being used for BFGS, by default None
-    gain : float, optional
-        _description_, by default 0.5
-    all_ims : list, optional
-        All commands saved from previous iterations, by default None
-    all_efs : list, optional
-        All commands saved from previous iterations, by default None
-    all_commands : list, optional
-        All commands saved from previous iterations, by default None
-
-    Returns
-    -------
-    _type_
-        _description_
-    """
-    
     starting_itr = len(all_ims)
 
     # E_model_nom = ensure_np_array(m.forward(np.zeros(m.Nacts), use_vortex=True, use_wfe=False) * m.control_mask)
@@ -155,7 +121,6 @@ def sim(m, val_and_grad,
         res = minimize(val_and_grad, 
                        jac=True, 
                        x0=del_acts0,
-                    #    args=(m, E_ab, reg_cond, E_target, E_model_nom), 
                        args=(m, ensure_np_array(total_command[m.dm_mask]), E_ab, reg_cond), 
                        method='L-BFGS-B',
                        tol=bfgs_tol,
@@ -165,8 +130,8 @@ def sim(m, val_and_grad,
         del_acts = gain * res.x
         del_command[m.dm_mask] = del_acts
         total_command += del_command
-        image_ni = xp.abs(m.forward(total_command[m.dm_mask], use_vortex=True, use_wfe=True))**2
-
+        # image_ni = xp.abs(m.forward(total_command[m.dm_mask], use_vortex=True, use_wfe=True))**2
+        image_ni = m.snap(total_command[m.dm_mask])
         mean_ni = xp.mean(image_ni[m.control_mask])
 
         all_ims.append(copy.copy(image_ni))
@@ -178,7 +143,7 @@ def sim(m, val_and_grad,
                 'Total DM Command', 
                 f'Image\nMean NI = {mean_ni:.3e}',
                 cmap1='viridis', cmap2='viridis', 
-                pxscl3=m.psf_pixelscale_lamD, lognorm3=True, vmin3=1e-9)
+                pxscl3=m.psf_pixelscale_lamD, lognorm3=True, vmin3=1e-10)
 
     return all_ims, all_efs, all_commands
 
@@ -237,7 +202,7 @@ def run(sysi,
                 'Total DM Command', 
                 f'Image\nMean NI = {mean_ni:.3e}',
                 cmap1='viridis', cmap2='viridis', 
-                pxscl3=m.psf_pixelscale_lamD, lognorm3=True, vmin3=1e-9)
+                pxscl3=m.psf_pixelscale_lamD, lognorm3=True, vmin3=1e-10)
 
     return all_ims, all_efs, all_commands
 
