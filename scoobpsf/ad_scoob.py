@@ -75,7 +75,9 @@ def acts_to_command(acts, dm_mask):
     return command
 
 class MODEL():
-    def __init__(self):
+    def __init__(self,
+                 use_dead_act=True,
+                 ):
 
         # initialize physical parameters
         self.wavelength_c = 633e-9*u.m
@@ -117,9 +119,12 @@ class MODEL():
                                              Nacts_per_inf=self.Nact + 2, # number of influence functions across the grid
                                              coupling=0.15,)
         self.Nsurf = self.inf_fun.shape[0]
+
         self.dm_mask = make_dm_mask(self.Nact)
+        if use_dead_act:
+            self.dead_act = [25, 21]
+            self.dm_mask[self.dead_act[0], self.dead_act[1]] = 0
         self.Nacts = int(self.dm_mask.sum())
-        # if dead_acts 
 
         # self.inf_matrix = make_inf_matrix(self.inf_fun, self.inf_sampling, self.dm_mask)
 
@@ -243,7 +248,7 @@ class MODEL():
     def snap(self, actuators, use_vortex=True, use_wfe=True,):
         return xp.abs(self.forward(actuators, use_vortex=use_vortex, use_wfe=use_wfe,))**2
 
-def val_and_grad(del_acts, m, actuators, E_ab, r_cond, dead_acts=None, verbose=False):
+def val_and_grad(del_acts, m, actuators, E_ab, r_cond, verbose=False):
     # Convert array arguments into correct types
     actuators = ensure_np_array(actuators)
     E_ab = xp.array(E_ab)
@@ -305,12 +310,9 @@ def val_and_grad(del_acts, m, actuators, E_ab, r_cond, dead_acts=None, verbose=F
     dJ_dA = m.Mx_back@x1_bar@m.My_back / ( m.Nsurf * m.Nact * m.Nact ) # why I have to divide by this constant is beyond me
     dJ_dA = dJ_dA[m.dm_mask].real + xp.array( 2*del_acts * r_cond / (m.wavelength.to_value(u.m))**2 )
 
-    if dead_acts is not None: 
-        dJ_dA[dead_acts] = 0
-
     return ensure_np_array(J), ensure_np_array(dJ_dA)
 
-def val_and_grad_bb(del_acts, m, actuators, E_ab, r_cond, dead_acts=None, verbose=False):
+def val_and_grad_bb(del_acts, m, actuators, E_ab, r_cond, verbose=False):
     # Convert array arguments into GPU arrays if necessary
     E_ab = xp.array(E_ab)
     
@@ -373,9 +375,6 @@ def val_and_grad_bb(del_acts, m, actuators, E_ab, r_cond, dead_acts=None, verbos
     x1_bar = m.inf_fun_fft.conjugate() * x2_bar
     dJ_dA = m.Mx_back@x1_bar@m.My_back / ( m.Nsurf * m.Nact * m.Nact ) # why I have to divide by this constant is beyond me
     dJ_dA = dJ_dA[m.dm_mask].real + xp.array( 2*del_acts * r_cond / (m.wavelength.to_value(u.m))**2 )
-
-    if dead_acts is not None: 
-        dJ_dA[dead_acts] = 0
 
     return ensure_np_array(J), ensure_np_array(dJ_dA)
 
