@@ -9,14 +9,6 @@ try:
 except ImportError:
     print('Cupy unavailable; computations will not be performed using GPU with CuPy.')
     cupy_avail = False
-    
-try:
-    import jax.numpy
-    import jax.scipy
-    jax_avail = True
-except ImportError:
-    print('Jax available; Jax model can be used.')
-    jax_avail = False
 
 class np_backend:
     """A shim that allows a backend to be swapped at runtime."""
@@ -58,8 +50,6 @@ def update_scipy(module):
 def ensure_np_array(arr):
     if isinstance(arr, np.ndarray):
         return arr
-    elif jax_avail and isinstance(arr, jax.numpy.ndarray):
-        return np.asarray(arr)
     elif cupy_avail and isinstance(arr, cupy.ndarray):
         return arr.get()
         
