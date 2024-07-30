@@ -87,7 +87,7 @@ class MODEL():
         self.lyot_ratio = 8.6/9.1
         self.crad = 34/2 * 9.1/10.2 * 8.6/9.1
         # self.psf_pixelscale_lamDc = 0.17
-        self.psf_pixelscale_lamDc = 0.303
+        self.psf_pixelscale_lamDc = 0.307
         self.psf_pixelscale_lamD = self.psf_pixelscale_lamDc
 
         self.wavelength = 633e-9*u.m
@@ -101,7 +101,7 @@ class MODEL():
             self.nlyot += 1
         self.oversample = 2.048
         self.N = int(self.npix*self.oversample)
-        self.npsf = 200
+        self.npsf = 150
 
         self.WFE = xp.ones((self.npix,self.npix), dtype=complex)
         
@@ -195,7 +195,7 @@ class MODEL():
         self.control_mask = _scipy.ndimage.rotate(control_mask, self.dh_rotation, reshape=False, order=0)
         self.Nmask = int(control_mask.sum())
 
-    def forward(self, actuators, use_vortex=True, use_wfe=True, return_pupil=False):
+    def forward(self, actuators, use_vortex=True, use_wfe=True, return_pupil=False, plot=False):
         # dm_surf = self.inf_matrix.dot(xp.array(actuators)).reshape(self.Nsurf,self.Nsurf)
         dm_command = xp.zeros((self.Nact,self.Nact))
         dm_command[self.dm_mask] = xp.array(actuators)
@@ -206,11 +206,11 @@ class MODEL():
 
         wf = utils.pad_or_crop(self.APERTURE, self.N).astype(xp.complex128)
         wf *= utils.pad_or_crop(dm_phasor, self.N)
-        # imshow2(xp.abs(wf), xp.angle(wf), npix=npix)
+        if plot: imshow2(xp.abs(wf), xp.angle(wf), npix=self.npix)
 
         if use_wfe: 
             wf *= utils.pad_or_crop(self.WFE, self.N)
-            # imshow2(xp.abs(wf), xp.angle(wf), npix=npix)
+            if plot: imshow2(xp.abs(wf), xp.angle(wf), npix=self.npix)
 
         E_pup = copy.copy(wf)
 
@@ -232,13 +232,16 @@ class MODEL():
             wf = utils.pad_or_crop(wf, self.N)
             # imshow2(xp.abs(wf), xp.angle(wf))
 
+        wf = xp.rot90(xp.rot90(wf)) # rotate array by 180 since we are going through focus
+        wf = xp.fliplr(wf)
         wf *= utils.pad_or_crop(self.LYOT, self.N)
-        # imshow2(xp.abs(wf), xp.angle(wf), npix=2*npix)
+        if plot: imshow2(xp.abs(wf), xp.angle(wf), npix=self.npix)
 
         wf = utils.pad_or_crop(wf, self.nlyot)
         fpwf = props.mft_forward(wf, self.psf_pixelscale_lamD, self.npsf) / xp.sqrt(self.Imax_ref)
 
         fpwf = _scipy.ndimage.rotate(fpwf, self.det_rotation, reshape=False, order=5)
+        if plot: imshow2(xp.abs(fpwf)**2, xp.angle(fpwf), lognorm1=True)
 
         if return_pupil:
             return fpwf, E_pup
@@ -275,6 +278,8 @@ def val_and_grad(del_acts, m, actuators, E_ab, r_cond, verbose=False):
     dJ_dE_ls = props.mft_reverse(dJ_dE_dm, m.psf_pixelscale_lamD, m.nlyot)
     dJ_dE_ls = utils.pad_or_crop(dJ_dE_ls, m.npix)
     dJ_dE_lp = m.LYOT * dJ_dE_ls
+    dJ_dE_lp = xp.fliplr(dJ_dE_lp) # account for the parity flip from reflection
+    dJ_dE_lp = xp.rot90(xp.rot90(dJ_dE_lp)) # account for the parity flip going through focus
     # imshow2(xp.abs(dJ_dE_lp), xp.angle(dJ_dE_lp))
 
     # Now we have to split and back-propagate the gradient along the two branches 
