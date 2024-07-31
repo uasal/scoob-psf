@@ -80,6 +80,7 @@ class SCOOBI():
     def __init__(self, 
                  dm_channel,
                  cam_channel,
+                 locam_channel=None,
                  dm_ref=np.zeros((34,34)),
                  x_shift=0,
                  y_shift=0,
@@ -97,6 +98,8 @@ class SCOOBI():
         self.wavelength_c = 633e-9*u.m
         
         self.CAM = ImageStream(cam_channel)
+        if locam_channel is not None:
+            self.LOCAM = ImageStream(locam_channel)
 
         self.dm_channel = dm_channel
         self.DM = scoob_utils.connect_to_dmshmim(channel=dm_channel) # channel used for writing to DM
@@ -138,11 +141,17 @@ class SCOOBI():
         self.nbits = 16
 
         self.texp = 1
-        self.att = 1
         self.gain = 1
+        self.att = 1
+
+        self.texp_locam = 1
+        self.gain_locam = 1
 
         self.df = None
         self.subtract_dark = False
+
+        self.df_locam = None
+        self.subtract_dark_locam = False
 
         self.return_ni = False
 
@@ -173,6 +182,11 @@ class SCOOBI():
         time.sleep(delay)
         self.gain = gain
         print(f'Set the ZWO gain setting to {gain:.1f}')
+
+    def set_locam_exp_time(self, exp_time, client, delay=0.25):
+        self.texp_locam = exp_time
+        client['nsvcam.exptime.target'] = value
+        print(f'Set the LOCAM exposure time to {self.texp:.2e}s')
 
     def zero_dm(self):
         self.DM.write(np.zeros(self.dm_shape))
@@ -228,8 +242,35 @@ class SCOOBI():
         
         return im
     
-    def snap_many(self,):
-        return self.CAM.grab_many(self.Nframes)
+    def normalize_locam(self, image):
+        image_ni = image/self.Imax_ref
+        image_ni *= (self.texp_ref/self.texp)
+        image_ni *= 10**((self.att-self.att_ref)/10)
+        image_ni *= 10**(-self.gain/20 * 0.1) / 10**(-self.gain_ref/20 * 0.1)
+        # gain ~ 10^(-gain_setting/20 * 0.1)
+        return image_ni
+
+    def snap_locam(self):
+        if self.Nframes>1:
+            ims = self.LOCAM.grab_many(self.Nframes)
+            im = np.sum(ims, axis=0)/self.Nframes
+        else:
+            im = self.LOCAM.grab_latest()
+        
+        im = scipy.ndimage.shift(im, (self.y_shift, self.x_shift), order=0)
+        im = pad_or_crop(im, self.npsf)
+
+        if self.subtract_dark_locam and self.df_locam is not None:
+            im -= self.df_locam
+            im[im<0] = 0.0
+            
+        if self.return_ni:
+            im = self.normalize_locam(im)
+
+        return im
+
+
+
     
 def snap_many(images, Nframes_per_exp, exp_times, gains, plot=False):
     total_im = 0.0

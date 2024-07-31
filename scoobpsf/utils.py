@@ -1,9 +1,11 @@
 from .math_module import xp, _scipy, ensure_np_array
+from .imshows import imshow1, imshow2, imshow3
+
 import numpy as np
 import scipy
-
 from astropy.io import fits
 import pickle
+from matplotlib.patches import Circle, Rectangle
 
 def make_grid(npix, pixelscale=1, half_shift=False):
     if half_shift:
@@ -225,3 +227,97 @@ def centroid(arr, rounded=False):
         
     yc = round(weighted_sum_y/total_sum_y) if rounded else weighted_sum_y/total_sum_y
     return xp.array([xc, yc])
+
+
+import skimage
+
+def create_fourier_command(x_cpa=10, y_cpa=10, Nact=34):
+    # cpa = cycles per aperture
+    # max cpa must be Nact/2
+    if x_cpa>Nact/2 or y_cpa>Nact/2:
+        raise ValueError('The cycles per aperture is too high for the specified number of actuators.')
+    y,x = xp.indices((Nact, Nact)) - Nact//2
+    fourier_command = xp.cos(2*np.pi*(x_cpa*x + y_cpa*y)/Nact)
+    return fourier_command
+
+def measure_center_and_angle(waffle_im, psf_pixelscale_lamD, im_thresh=1e-4, r_thresh=12,
+                           verbose=True, 
+                           plot=True):
+    npsf = waffle_im.shape[0]
+    y,x = (xp.indices((npsf, npsf)) - npsf//2)*psf_pixelscale_lamD
+    r = xp.sqrt(x**2 + y**2)
+    waffle_mask = (waffle_im >im_thresh) * (r>r_thresh)
+
+    centroids = []
+    for i in [0,1]:
+        for j in [0,1]:
+            arr = waffle_im[j*npsf//2:(j+1)*npsf//2, i*npsf//2:(i+1)*npsf//2]
+            mask = waffle_mask[j*npsf//2:(j+1)*npsf//2, i*npsf//2:(i+1)*npsf//2]
+            cent = np.flip(skimage.measure.centroid(ensure_np_array(mask*arr)))
+            cent[0] += i*npsf//2
+            cent[1] += j*npsf//2
+            centroids.append(cent)
+            # print(cent)
+            # imshow3(mask, arr, mask*arr, lognorm2=True,
+            #         patches1=[Circle(cent, 1, fill=True, color='cyan')])
+    centroids.append(centroids[0])
+    centroids = np.array(centroids)
+    centroids[[2,3]] = centroids[[3,2]]
+    if verbose: print('Centroids:\n', centroids)
+
+    if plot: 
+        patches = []
+        for i in range(4):
+            patches.append(Circle(centroids[i], 1, fill=False, color='black'))
+        imshow3(waffle_mask, waffle_im, waffle_mask*waffle_im, lognorm2=True, vmin2=1e-5,
+                patches1=patches)
+
+    mean_angle = 0.0
+    for i in range(4):
+        angle = np.arctan2(centroids[i+1][1] - centroids[i][1], centroids[i+1][0] - centroids[i][0]) * 180/np.pi
+        if angle<0:
+            angle += 360
+        if 0<angle<90:
+            angle = 90-angle
+        elif 90<angle<180:
+            angle = 180-angle
+        elif 180<angle<270:
+            angle = 270-angle
+        elif 270<angle<360:
+            angle = 360-angle
+        mean_angle += angle/4
+    if verbose: print('Angle: ', mean_angle)
+
+    m1 = (centroids[0][1] - centroids[2][1])/(centroids[0][0] - centroids[2][0])
+    m2 = (centroids[1][1] - centroids[3][1])/(centroids[1][0] - centroids[3][0])
+    # print(m1,m2)
+    b1 = -m1*centroids[0][0] + centroids[0][1]
+    b2 =  -m2*centroids[1][0] + centroids[1][1]
+    # print(b1,b2)
+
+    # m1*x + b1 = m2*x + b2
+    # (m1-m2) * x = b2 - b1
+    xc = (b2 - b1) / (m1 - m2)
+    yc = m1*xc + b1
+    print('Measured center in X: ', xc)
+    print('Measured center in Y: ', yc)
+
+    xshift = np.round(npsf/2 - xc)
+    yshift = np.round(npsf/2 - yc)
+    print('Required shift in X: ', xshift)
+    print('Required shift in Y: ', yshift)
+
+    return xshift,yshift,mean_angle
+
+def create_control_mask(npsf, pxscl, iwa=3, owa=12, edge=None, rotation=0, centered=True):
+    if centered:
+        x = xp.linspace(-npsf/2, npsf/2-1, npsf)*pxscl
+    else:
+        x = (xp.linspace(-npsf/2, npsf/2-1, npsf) + 1/2)*pxscl
+    x,y = xp.meshgrid(x,x)
+    r = xp.hypot(x, y)
+    control_mask = (r < owa) * (r > iwa)
+    if edge is not None: control_mask *= (x > edge)
+
+    control_mask = _scipy.ndimage.rotate(control_mask, rotation, reshape=False, order=0)
+    return control_mask

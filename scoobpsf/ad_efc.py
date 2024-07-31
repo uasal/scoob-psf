@@ -195,9 +195,9 @@ def run_pwp(sysi, m, current_acts,
         E_with_probe = m.forward(xp.array(current_acts) + xp.array(probe_amp*probes[i])[m.dm_mask], use_vortex=True, use_wfe=True)
         E_probe = E_with_probe - E_nom
 
-        if plot:
-            imshow2(xp.abs(E_probe), xp.angle(E_probe),
-                    f'Probe {i+1}: '+'$|E_{probe}|$', f'Probe {i+1}: '+r'$\angle E_{probe}$')
+        # if plot:
+        #     imshow2(xp.abs(E_probe), xp.angle(E_probe),
+        #             f'Probe {i+1}: '+'$|E_{probe}|$', f'Probe {i+1}: '+r'$\angle E_{probe}$')
             
         E_probes[i, ::2] = E_probe[control_mask].real
         E_probes[i, 1::2] = E_probe[control_mask].imag
@@ -309,8 +309,12 @@ def run(sysi,
     del_command = xp.zeros((m.Nact,m.Nact))
     del_acts0 = np.zeros(m.Nacts)
     for i in range(Nitr):
-        E_ab = est_fun(sysi, est_params)
+        print('Running estimation algoirthm ...')
+        sysi.subtract_dark = False
+        # E_ab = est_fun(sysi, **est_params)
+        E_ab = est_fun(sysi, m, ensure_np_array(total_command[m.dm_mask]), **est_params)
         
+        print('Computing EFC command with L-BFGS')
         res = minimize(val_and_grad, 
                        jac=True, 
                        x0=del_acts0,
@@ -327,6 +331,7 @@ def run(sysi,
 
         # sysi.set_dm(total_command)
         sysi.add_dm(del_command)
+        sysi.subtract_dark = True
         image_ni = sysi.snap()
 
         mean_ni = xp.mean(image_ni[m.control_mask])
@@ -335,11 +340,14 @@ def run(sysi,
         all_efs.append(copy.copy(E_ab))
         all_commands.append(copy.copy(total_command))
 
+        
         imshow3(del_command, total_command, image_ni, 
                 f'Iteration {starting_itr + i + 1:d}: $\delta$DM', 
                 'Total DM Command', 
                 f'Image\nMean NI = {mean_ni:.3e}',
                 cmap1='viridis', cmap2='viridis', 
+                vmin1=-xp.max(xp.abs(del_command)), vmax1=xp.max(xp.abs(del_command)),
+                vmin2=-xp.max(xp.abs(total_command)), vmax2=xp.max(xp.abs(total_command)),
                 pxscl3=m.psf_pixelscale_lamD, lognorm3=True, vmin3=1e-10)
 
     return all_ims, all_efs, all_commands
