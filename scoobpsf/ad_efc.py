@@ -195,9 +195,10 @@ def run_pwp(sysi, m, current_acts,
         E_with_probe = m.forward(xp.array(current_acts) + xp.array(probe_amp*probes[i])[m.dm_mask], use_vortex=True, use_wfe=True)
         E_probe = E_with_probe - E_nom
 
-        # if plot:
-        #     imshow2(xp.abs(E_probe), xp.angle(E_probe),
-        #             f'Probe {i+1}: '+'$|E_{probe}|$', f'Probe {i+1}: '+r'$\angle E_{probe}$')
+        if plot:
+            imshow2(xp.abs(E_probe), xp.angle(E_probe),
+                    f'Probe {i+1}: '+'$|E_{probe}|$', f'Probe {i+1}: '+r'$\angle E_{probe}$',
+                    cmap2='viridis')
             
         E_probes[i, ::2] = E_probe[control_mask].real
         E_probes[i, 1::2] = E_probe[control_mask].imag
