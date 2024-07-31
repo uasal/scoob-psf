@@ -7,3 +7,10 @@ dist/
 scoobpsf.egg-info/
 
 scoob-opds/*
+
+notebooks/data/
+scoobpsf/data/
+
+scoobpsf/pr_ifcube_2022_09_16.fits
+
+
