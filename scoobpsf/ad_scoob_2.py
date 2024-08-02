@@ -144,18 +144,16 @@ class MODEL():
         self.My_back = xp.exp(1j*2*np.pi*xp.outer(fy,yc))
 
         # Vortex model parameters
-        self.oversample_vortex = 4.096
-        self.N_vortex_lres = int(self.npix*self.oversample_vortex)
-        self.lres_sampling = 1/self.oversample_vortex # low resolution sampling in lam/D per pixel
-        self.lres_win_size = int(20/self.lres_sampling) + 1
+        self.win_size = 30 # size of the Tukey window to use in lambda/D
+        self.lres_sampling = 1/self.oversample # low resolution sampling in lam/D per pixel
+        self.lres_win_size = int(self.win_size/self.lres_sampling)
         w1d = xp.array(windows.tukey(self.lres_win_size, 1, False))
-        self.lres_window = utils.pad_or_crop(xp.outer(w1d, w1d), self.N_vortex_lres)
-        self.vortex_lres = props.make_vortex_phase_mask(self.N_vortex_lres)
-        # imshow2(xp.angle(vortex_lres), 1-lres_window, npix1=64, npix2=lres_win_size, pxscl2=lres_sampling)
+        self.lres_window = utils.pad_or_crop(xp.outer(w1d, w1d), self.N)
+        self.vortex_lres = props.make_vortex_phase_mask(self.N)
 
-        self.hres_sampling = 0.025 # lam/D per pixel; this value is chosen empirically
-        self.N_vortex_hres = int(np.round(30.029296875/self.hres_sampling))
-        self.hres_win_size = int(30.029296875/self.hres_sampling)
+        self.hres_sampling = 0.02 # lam/D per pixel; this value is chosen empirically
+        self.hres_win_size = int(self.win_size/self.hres_sampling)
+        self.N_vortex_hres = self.hres_win_size
         w1d = xp.array(windows.tukey(self.hres_win_size, 1, False))
         self.hres_window = utils.pad_or_crop(xp.outer(w1d, w1d), self.N_vortex_hres)
         self.vortex_hres = props.make_vortex_phase_mask(self.N_vortex_hres)
@@ -163,8 +161,7 @@ class MODEL():
         y,x = (xp.indices((self.N_vortex_hres, self.N_vortex_hres)) - self.N_vortex_hres//2)*self.hres_sampling
         r = xp.sqrt(x**2 + y**2)
         sing_mask = r>=0.15
-        self.hres_window *= sing_mask
-        # imshow2(xp.angle(vortex_hres), hres_window, npix1=64, npix2=hres_win_size, pxscl2=hres_sampling)
+        # self.hres_window *= sing_mask
 
         self.det_rotation = 0
 
@@ -199,21 +196,16 @@ class MODEL():
         E_pup = copy.copy(wf)
 
         if use_vortex:
-            lres_wf = utils.pad_or_crop(wf, self.N_vortex_lres) # pad to the larger array for the low res propagation
-            fp_wf_lres = xp.fft.ifftshift(xp.fft.fft2(xp.fft.fftshift(lres_wf))) # to FPM
+            fp_wf_lres = xp.fft.ifftshift(xp.fft.fft2(xp.fft.fftshift(wf))) # to FPM
             fp_wf_lres *= self.vortex_lres * (1 - self.lres_window) # apply low res (windowed) FPM
             pupil_wf_lres = xp.fft.fftshift(xp.fft.ifft2(xp.fft.ifftshift(fp_wf_lres))) # to Lyot Pupil
-            # pupil_wf_lres = utils.pad_or_crop(pupil_wf_lres, N)
 
-            hres_wf = utils.pad_or_crop(wf, self.npix) # crop to the pupil diameter for the high res propagation
-            fp_wf_hres = props.mft_forward(hres_wf, self.hres_sampling, self.N_vortex_hres)
+            fp_wf_hres = props.mft_forward(wf, self.hres_sampling*self.oversample, self.N_vortex_hres)
             fp_wf_hres *= self.vortex_hres * self.hres_window # apply high res (windowed) FPM
-            # pupil_wf_hres = props.mft_reverse(fp_wf_hres, hres_sampling, npix,)
-            # pupil_wf_hres = utils.pad_or_crop(pupil_wf_hres, N)
-            pupil_wf_hres = props.mft_reverse(fp_wf_hres, self.hres_sampling*self.oversample_vortex, self.N_vortex_lres,)
+            pupil_wf_hres = props.mft_reverse(fp_wf_hres, self.hres_sampling*self.oversample, self.N,)
 
             wf = (pupil_wf_lres + pupil_wf_hres)
-            wf = utils.pad_or_crop(wf, self.N)
+            if plot: imshow3(xp.abs(pupil_wf_lres), xp.abs(pupil_wf_hres), xp.abs(wf))
             # imshow2(xp.abs(wf), xp.angle(wf))
 
         wf = xp.rot90(xp.rot90(wf)) # rotate array by 180 since we are going through focus
