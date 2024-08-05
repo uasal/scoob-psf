@@ -61,7 +61,7 @@ def ang_spec(wavefront, wavelength, distance, pixelscale):
 
     return prop_wf
 
-def mft_forward(pupil, psf_pixelscale_lamD, npsf):
+def mft_forward(pupil, psf_pixelscale_lamD, npsf, convention='-'):
     """_summary_
 
     Parameters
@@ -90,14 +90,18 @@ def mft_forward(pupil, psf_pixelscale_lamD, npsf):
     xu = xp.outer(Us, Xs)
     vy = xp.outer(Xs, Us)
 
-    My = xp.exp(-1j*2*np.pi*vy) 
-    Mx = xp.exp(-1j*2*np.pi*xu) 
+    if convention=='-':
+        My = xp.exp(-1j*2*np.pi*vy) 
+        Mx = xp.exp(-1j*2*np.pi*xu)
+    else:
+        My = xp.exp(1j*2*np.pi*vy) 
+        Mx = xp.exp(1j*2*np.pi*xu)
 
     norm_coeff = psf_pixelscale_lamD/npix
 
     return Mx@pupil@My * norm_coeff
 
-def mft_reverse(fpwf, psf_pixelscale_lamD, npix):
+def mft_reverse(fpwf, psf_pixelscale_lamD, npix, convention='+'):
     """_summary_
 
     Parameters
@@ -127,8 +131,12 @@ def mft_reverse(fpwf, psf_pixelscale_lamD, npix):
     ux = xp.outer(Xs, Us)
     yv = xp.outer(Us, Xs)
 
-    My = xp.exp(1j*2*np.pi*yv) 
-    Mx = xp.exp(1j*2*np.pi*ux) 
+    if convention=='+':
+        My = xp.exp(1j*2*np.pi*yv) 
+        Mx = xp.exp(1j*2*np.pi*ux)
+    else:
+        My = xp.exp(-1j*2*np.pi*yv) 
+        Mx = xp.exp(-1j*2*np.pi*ux)
 
     norm_coeff = psf_pixelscale_lamD/npix 
 

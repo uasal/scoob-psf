@@ -147,15 +147,15 @@ class MODEL():
         self.oversample_vortex = 4.096
         self.N_vortex_lres = int(self.npix*self.oversample_vortex)
         self.lres_sampling = 1/self.oversample_vortex # low resolution sampling in lam/D per pixel
-        self.lres_win_size = int(20/self.lres_sampling) + 1
+        self.lres_win_size = int(30/self.lres_sampling) + 1
         w1d = xp.array(windows.tukey(self.lres_win_size, 1, False))
         self.lres_window = utils.pad_or_crop(xp.outer(w1d, w1d), self.N_vortex_lres)
         self.vortex_lres = props.make_vortex_phase_mask(self.N_vortex_lres)
         # imshow2(xp.angle(vortex_lres), 1-lres_window, npix1=64, npix2=lres_win_size, pxscl2=lres_sampling)
 
-        self.hres_sampling = 0.025 # lam/D per pixel; this value is chosen empirically
-        self.N_vortex_hres = int(np.round(30.029296875/self.hres_sampling))
-        self.hres_win_size = int(30.029296875/self.hres_sampling)
+        self.hres_sampling = 0.02 # lam/D per pixel; this value is chosen empirically
+        self.N_vortex_hres = int(np.round(30/self.hres_sampling))
+        self.hres_win_size = int(30/self.hres_sampling)
         w1d = xp.array(windows.tukey(self.hres_win_size, 1, False))
         self.hres_window = utils.pad_or_crop(xp.outer(w1d, w1d), self.N_vortex_hres)
         self.vortex_hres = props.make_vortex_phase_mask(self.N_vortex_hres)
@@ -188,37 +188,38 @@ class MODEL():
         dm_surf = xp.fft.ifftshift(xp.fft.ifft2(xp.fft.fftshift(fourier_surf,))).real
         dm_phasor = xp.exp(1j * 4*xp.pi/self.wavelength.to_value(u.m) * dm_surf)
 
-        wf = utils.pad_or_crop(self.APERTURE, self.N).astype(xp.complex128)
-        wf *= utils.pad_or_crop(dm_phasor, self.N)
-        if plot: imshow2(xp.abs(wf), xp.angle(wf), npix=self.npix)
+        # wf = utils.pad_or_crop(self.APERTURE, self.N).astype(xp.complex128)
+        # wf *= utils.pad_or_crop(dm_phasor, self.N)
+        wf = self.APERTURE.astype(xp.complex128)
+        wf *= utils.pad_or_crop(dm_phasor, self.npix)
+        if plot: imshow2(xp.abs(wf), xp.angle(wf))
 
         if use_wfe: 
-            wf *= utils.pad_or_crop(self.WFE, self.N)
-            if plot: imshow2(xp.abs(wf), xp.angle(wf), npix=self.npix)
+            wf *= self.WFE
+            if plot: imshow2(xp.abs(wf), xp.angle(wf))
 
         E_pup = copy.copy(wf)
 
         if use_vortex:
             lres_wf = utils.pad_or_crop(wf, self.N_vortex_lres) # pad to the larger array for the low res propagation
-            fp_wf_lres = xp.fft.ifftshift(xp.fft.fft2(xp.fft.fftshift(lres_wf))) # to FPM
+            fp_wf_lres = props.fft(lres_wf)
             fp_wf_lres *= self.vortex_lres * (1 - self.lres_window) # apply low res (windowed) FPM
-            pupil_wf_lres = xp.fft.fftshift(xp.fft.ifft2(xp.fft.ifftshift(fp_wf_lres))) # to Lyot Pupil
-            # pupil_wf_lres = utils.pad_or_crop(pupil_wf_lres, N)
+            pupil_wf_lres = props.ifft(fp_wf_lres)
+            pupil_wf_lres = utils.pad_or_crop(pupil_wf_lres, self.npix)
 
-            hres_wf = utils.pad_or_crop(wf, self.npix) # crop to the pupil diameter for the high res propagation
-            fp_wf_hres = props.mft_forward(hres_wf, self.hres_sampling, self.N_vortex_hres)
+            fp_wf_hres = props.mft_forward(wf, self.hres_sampling, self.N_vortex_hres, convention='-')
             fp_wf_hres *= self.vortex_hres * self.hres_window # apply high res (windowed) FPM
-            # pupil_wf_hres = props.mft_reverse(fp_wf_hres, hres_sampling, npix,)
-            # pupil_wf_hres = utils.pad_or_crop(pupil_wf_hres, N)
-            pupil_wf_hres = props.mft_reverse(fp_wf_hres, self.hres_sampling*self.oversample_vortex, self.N_vortex_lres,)
+            pupil_wf_hres = props.mft_reverse(fp_wf_hres, self.hres_sampling, self.npix, convention='+')
 
             wf = (pupil_wf_lres + pupil_wf_hres)
-            wf = utils.pad_or_crop(wf, self.N)
+            wf = utils.pad_or_crop(wf, self.npix)
+            if plot: imshow3(xp.abs(pupil_wf_lres), xp.abs(pupil_wf_hres), xp.abs(wf))
+
             # imshow2(xp.abs(wf), xp.angle(wf))
 
         wf = xp.rot90(xp.rot90(wf)) # rotate array by 180 since we are going through focus
         wf = xp.fliplr(wf)
-        wf *= utils.pad_or_crop(self.LYOT, self.N)
+        wf *= self.LYOT
         if plot: imshow2(xp.abs(wf), xp.angle(wf), npix=self.npix)
 
         wf = utils.pad_or_crop(wf, self.nlyot)
@@ -259,7 +260,7 @@ def val_and_grad(del_acts, M, actuators, E_ab, r_cond, control_mask, verbose=Fal
     delE_masked = control_mask * delE # still a 2D array
     delE_masked = _scipy.ndimage.rotate(delE_masked, -M.det_rotation, reshape=False, order=5)
     dJ_dE_dm = 2 * delE_masked / E_ab_l2norm
-    dJ_dE_ls = props.mft_reverse(dJ_dE_dm, M.psf_pixelscale_lamD, M.nlyot)
+    dJ_dE_ls = props.mft_reverse(dJ_dE_dm, M.psf_pixelscale_lamD, M.nlyot, convention='+')
     dJ_dE_ls = utils.pad_or_crop(dJ_dE_ls, M.npix)
     dJ_dE_lp = M.LYOT * dJ_dE_ls
     dJ_dE_lp = xp.fliplr(dJ_dE_lp) # account for the parity flip from reflection
@@ -270,21 +271,23 @@ def val_and_grad(del_acts, M, actuators, E_ab, r_cond, control_mask, verbose=Fal
     # used to model the vortex. So one branch for the FFT vortex procedure and one 
     # for the MFT vortex procedure. 
     dJ_dE_lp_fft = utils.pad_or_crop(copy.copy(dJ_dE_lp), M.N_vortex_lres)
-    dJ_dE_fpm_fft = xp.fft.fftshift(xp.fft.fft2(xp.fft.ifftshift(dJ_dE_lp_fft)))
+    # dJ_dE_fpm_fft = xp.fft.fftshift(xp.fft.fft2(xp.fft.ifftshift(dJ_dE_lp_fft)))
+    dJ_dE_fpm_fft = props.ifft(dJ_dE_lp_fft)
     dJ_dE_fp_fft = M.vortex_lres.conjugate() * (1 - M.lres_window) * dJ_dE_fpm_fft
-    dJ_dE_pup_fft = xp.fft.ifftshift(xp.fft.ifft2(xp.fft.fftshift(dJ_dE_fp_fft)))
+    # dJ_dE_pup_fft = xp.fft.ifftshift(xp.fft.ifft2(xp.fft.fftshift(dJ_dE_fp_fft)))
+    dJ_dE_pup_fft = props.fft(dJ_dE_fp_fft)
     dJ_dE_pup_fft = utils.pad_or_crop(dJ_dE_pup_fft, M.N)
-    # imshow2(xp.abs(dJ_dE_pup_fft), xp.angle(dJ_dE_pup_fft), npix=1*npix)
+    imshow2(xp.abs(dJ_dE_pup_fft), xp.angle(dJ_dE_pup_fft), npix=1*M.npix)
 
     dJ_dE_lp_mft = utils.pad_or_crop(copy.copy(dJ_dE_lp), M.N_vortex_lres)
-    dJ_dE_fpm_mft = props.mft_forward(dJ_dE_lp_mft, M.hres_sampling*M.oversample_vortex, M.N_vortex_hres)
+    dJ_dE_fpm_mft = props.mft_forward(dJ_dE_lp_mft, M.hres_sampling*M.oversample_vortex, M.N_vortex_hres, convention='+')
     # dJ_dE_lp_mft = utils.pad_or_crop(copy.copy(dJ_dE_lp), nlyot)
     # dJ_dE_fpm_mft = props.mft_forward(dJ_dE_lp_mft, hres_sampling, N_vortex_hres)
     dJ_dE_fp_mft = M.vortex_hres.conjugate() * M.hres_window * dJ_dE_fpm_mft
     # dJ_dE_pup_mft = props.mft_reverse(dJ_dE_fp_mft, hres_sampling, npix,)
-    dJ_dE_pup_mft = props.mft_reverse(dJ_dE_fp_mft, M.hres_sampling*M.oversample, M.N,)
+    dJ_dE_pup_mft = props.mft_reverse(dJ_dE_fp_mft, M.hres_sampling*M.oversample, M.N, convention='-')
     # dJ_dE_pup_mft = utils.pad_or_crop(dJ_dE_pup_mft, N)
-    # imshow2(xp.abs(dJ_dE_pup_mft), xp.angle(dJ_dE_pup_mft), npix=1*npix)
+    imshow2(xp.abs(dJ_dE_pup_mft), xp.angle(dJ_dE_pup_mft), npix=1*M.npix)
 
     dJ_dE_pup = dJ_dE_pup_fft + dJ_dE_pup_mft
     # imshow2(xp.abs(dJ_dE_pup), xp.angle(dJ_dE_pup), npix=1*npix)
