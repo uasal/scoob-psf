@@ -153,7 +153,7 @@ class MODEL():
         self.vortex_lres = props.make_vortex_phase_mask(self.N_vortex_lres)
         # imshow2(xp.angle(vortex_lres), 1-lres_window, npix1=64, npix2=lres_win_size, pxscl2=lres_sampling)
 
-        self.hres_sampling = 0.02 # lam/D per pixel; this value is chosen empirically
+        self.hres_sampling = 0.025 # lam/D per pixel; this value is chosen empirically
         self.N_vortex_hres = int(np.round(30/self.hres_sampling))
         self.hres_win_size = int(30/self.hres_sampling)
         w1d = xp.array(windows.tukey(self.hres_win_size, 1, False))
@@ -236,7 +236,7 @@ class MODEL():
     def snap(self, actuators, use_vortex=True, use_wfe=True,):
         return xp.abs(self.forward(actuators, use_vortex=use_vortex, use_wfe=use_wfe,))**2
 
-def val_and_grad(del_acts, M, actuators, E_ab, r_cond, control_mask, verbose=False):
+def val_and_grad(del_acts, M, actuators, E_ab, r_cond, control_mask, verbose=False, plot=False):
     # Convert array arguments into correct types
     actuators = ensure_np_array(actuators)
     E_ab = xp.array(E_ab)
@@ -254,7 +254,11 @@ def val_and_grad(del_acts, M, actuators, E_ab, r_cond, control_mask, verbose=Fal
     J_delE = delE_vec.dot(delE_vec.conjugate()).real
     J_c = del_acts.dot(del_acts) * r_cond / (M.wavelength_c.to_value(u.m))**2
     J = (J_delE + J_c) / E_ab_l2norm
-    if verbose: print(J_delE, J_c, E_ab_l2norm, J)
+    if verbose: 
+        print(f'Cost-function J_delE: {J_delE:.3f}') 
+        print(f'Cost-function J_c: {J_c:.3f}') 
+        print(f'Cost-function normalization factor: {E_ab_l2norm:.3f}')
+        print(f'Total cost-function value: {J:.3f}')
 
     # Compute the gradient with the adjoint model
     delE_masked = control_mask * delE # still a 2D array
@@ -265,32 +269,26 @@ def val_and_grad(del_acts, M, actuators, E_ab, r_cond, control_mask, verbose=Fal
     dJ_dE_lp = M.LYOT * dJ_dE_ls
     dJ_dE_lp = xp.fliplr(dJ_dE_lp) # account for the parity flip from reflection
     dJ_dE_lp = xp.rot90(xp.rot90(dJ_dE_lp)) # account for the parity flip going through focus
-    # imshow2(xp.abs(dJ_dE_lp), xp.angle(dJ_dE_lp))
+    if plot: imshow2(xp.abs(dJ_dE_lp), xp.angle(dJ_dE_lp))
 
     # Now we have to split and back-propagate the gradient along the two branches 
     # used to model the vortex. So one branch for the FFT vortex procedure and one 
     # for the MFT vortex procedure. 
     dJ_dE_lp_fft = utils.pad_or_crop(copy.copy(dJ_dE_lp), M.N_vortex_lres)
-    # dJ_dE_fpm_fft = xp.fft.fftshift(xp.fft.fft2(xp.fft.ifftshift(dJ_dE_lp_fft)))
     dJ_dE_fpm_fft = props.ifft(dJ_dE_lp_fft)
     dJ_dE_fp_fft = M.vortex_lres.conjugate() * (1 - M.lres_window) * dJ_dE_fpm_fft
-    # dJ_dE_pup_fft = xp.fft.ifftshift(xp.fft.ifft2(xp.fft.fftshift(dJ_dE_fp_fft)))
     dJ_dE_pup_fft = props.fft(dJ_dE_fp_fft)
-    dJ_dE_pup_fft = utils.pad_or_crop(dJ_dE_pup_fft, M.N)
-    imshow2(xp.abs(dJ_dE_pup_fft), xp.angle(dJ_dE_pup_fft), npix=1*M.npix)
+    dJ_dE_pup_fft = utils.pad_or_crop(dJ_dE_pup_fft, M.npix)
+    if plot: imshow2(xp.abs(dJ_dE_pup_fft), xp.angle(dJ_dE_pup_fft), npix=1*M.npix)
 
-    dJ_dE_lp_mft = utils.pad_or_crop(copy.copy(dJ_dE_lp), M.N_vortex_lres)
-    dJ_dE_fpm_mft = props.mft_forward(dJ_dE_lp_mft, M.hres_sampling*M.oversample_vortex, M.N_vortex_hres, convention='+')
-    # dJ_dE_lp_mft = utils.pad_or_crop(copy.copy(dJ_dE_lp), nlyot)
-    # dJ_dE_fpm_mft = props.mft_forward(dJ_dE_lp_mft, hres_sampling, N_vortex_hres)
+    dJ_dE_lp_mft = utils.pad_or_crop(copy.copy(dJ_dE_lp), M.npix)
+    dJ_dE_fpm_mft = props.mft_forward(dJ_dE_lp_mft, M.hres_sampling, M.N_vortex_hres, convention='-')
     dJ_dE_fp_mft = M.vortex_hres.conjugate() * M.hres_window * dJ_dE_fpm_mft
-    # dJ_dE_pup_mft = props.mft_reverse(dJ_dE_fp_mft, hres_sampling, npix,)
-    dJ_dE_pup_mft = props.mft_reverse(dJ_dE_fp_mft, M.hres_sampling*M.oversample, M.N, convention='-')
-    # dJ_dE_pup_mft = utils.pad_or_crop(dJ_dE_pup_mft, N)
-    imshow2(xp.abs(dJ_dE_pup_mft), xp.angle(dJ_dE_pup_mft), npix=1*M.npix)
+    dJ_dE_pup_mft = props.mft_reverse(dJ_dE_fp_mft, M.hres_sampling, M.npix, convention='+')
+    if plot: imshow2(xp.abs(dJ_dE_pup_mft), xp.angle(dJ_dE_pup_mft), npix=1*M.npix)
 
     dJ_dE_pup = dJ_dE_pup_fft + dJ_dE_pup_mft
-    # imshow2(xp.abs(dJ_dE_pup), xp.angle(dJ_dE_pup), npix=1*npix)
+    if plot: imshow2(xp.abs(dJ_dE_pup), xp.angle(dJ_dE_pup), npix=1*M.npix)
 
     dJ_dS_dm = 4*xp.pi / M.wavelength.to_value(u.m) * xp.imag(E_pup.conjugate()/xp.sqrt(M.Imax_ref) * dJ_dE_pup)
 
@@ -300,6 +298,7 @@ def val_and_grad(del_acts, M, actuators, E_ab, r_cond, control_mask, verbose=Fal
     x2_bar = xp.fft.fftshift(xp.fft.fft2(xp.fft.ifftshift(dJ_dS_dm.real)))
     x1_bar = M.inf_fun_fft.conjugate() * x2_bar
     dJ_dA = M.Mx_back@x1_bar@M.My_back / ( M.Nsurf * M.Nact * M.Nact ) # why I have to divide by this constant is beyond me
+    if plot: imshow2(dJ_dA.real, dJ_dA.imag)
     dJ_dA = dJ_dA[M.dm_mask].real + xp.array( 2*del_acts * r_cond / (M.wavelength_c.to_value(u.m))**2 )
 
     return ensure_np_array(J), ensure_np_array(dJ_dA)
