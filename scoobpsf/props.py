@@ -61,31 +61,19 @@ def ang_spec(wavefront, wavelength, distance, pixelscale):
 
     return prop_wf
 
-def mft_forward(pupil, psf_pixelscale_lamD, npsf, convention='-'):
-    """_summary_
-
-    Parameters
-    ----------
-    pupil : complex 2D array
-        the pupil plane wavefront
-    psf_pixelscale_lamD : scalar
-        the pixelscale of the desired focal plane wavefront in terms
-        of lambda/D
-    npsf : integer
-        the size of the desired focal plane in pixels
-
-    Returns
-    -------
-    complex 2D array
-        the complex wavefront at the focal plane
-    """
-
-    npix = pupil.shape[0]
+def mft_forward(wavefront, npix, npsf, psf_pixelscale_lamD, convention='-', pp_centering='even', fp_centering='odd'):
+    N = wavefront.shape[0]
     dx = 1.0 / npix
-    Xs = (xp.arange(npix, dtype=float) - (npix / 2) + 1/2) * dx
+    if pp_centering=='even':
+        Xs = (xp.arange(N, dtype=float) - (N / 2) + 1/2) * dx
+    elif pp_centering=='odd':
+        Xs = (xp.arange(N, dtype=float) - (N / 2)) * dx
 
     du = psf_pixelscale_lamD
-    Us = (xp.arange(npsf, dtype=float) - npsf / 2) * du
+    if fp_centering=='odd':
+        Us = (xp.arange(npsf, dtype=float) - npsf / 2) * du
+    elif fp_centering=='even':
+        Us = (xp.arange(npsf, dtype=float) - npsf / 2 + 1/2) * du
 
     xu = xp.outer(Us, Xs)
     vy = xp.outer(Xs, Us)
@@ -99,34 +87,21 @@ def mft_forward(pupil, psf_pixelscale_lamD, npsf, convention='-'):
 
     norm_coeff = psf_pixelscale_lamD/npix
 
-    return Mx@pupil@My * norm_coeff
+    return Mx@wavefront@My * norm_coeff
 
-def mft_reverse(fpwf, psf_pixelscale_lamD, npix, convention='+'):
-    """_summary_
-
-    Parameters
-    ----------
-    fpwf : complex 2D array
-        the focal plane wavefront
-    psf_pixelscale_lamD : scalar
-        the pixelscale of the given focal plane wavefront in terms
-        of lambda/D
-    npix : integer
-        number of pixels across the pupil plane we are 
-        performing the MFT to
-
-    Returns
-    -------
-    complex 2D array
-        the complex wavefront at the pupil plane
-    """
-
+def mft_reverse(fpwf, psf_pixelscale_lamD, npix, N, convention='+', pp_centering='even', fp_centering='odd'):
     npsf = fpwf.shape[0]
     du = psf_pixelscale_lamD
-    Us = (xp.arange(npsf, dtype=float) - npsf / 2) * du
+    if fp_centering=='odd':
+        Us = (xp.arange(npsf, dtype=float) - npsf / 2) * du
+    elif fp_centering=='even':
+        Us = (xp.arange(npsf, dtype=float) - npsf / 2 + 1/2) * du
 
     dx = 1.0 / npix
-    Xs = (xp.arange(npix, dtype=float) - (npix / 2) + 1/2) * dx
+    if pp_centering=='even':
+        Xs = (xp.arange(N, dtype=float) - (N / 2) + 1/2) * dx
+    elif pp_centering=='odd':
+        Xs = (xp.arange(N, dtype=float) - (N / 2)) * dx
 
     ux = xp.outer(Xs, Us)
     yv = xp.outer(Us, Xs)

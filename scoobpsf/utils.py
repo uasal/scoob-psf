@@ -31,6 +31,42 @@ def pad_or_crop( arr_in, npix ):
         arr_out[x1:x2,x1:x2] = arr_in
     return arr_out
 
+def save_fits(fpath, data, header=None, ow=True, quiet=False):
+    if header is not None:
+        keys = list(header.keys())
+        hdr = fits.Header()
+        for i in range(len(header)):
+            hdr[keys[i]] = header[keys[i]]
+    else: 
+        hdr = None
+    
+    data = ensure_np_array(data)
+    
+    hdu = fits.PrimaryHDU(data=data, header=hdr)
+    hdu.writeto(str(fpath), overwrite=ow) 
+    if not quiet: print('Saved data to: ', str(fpath))
+
+def load_fits(fpath, header=False):
+    data = xp.array(fits.getdata(fpath))
+    if header:
+        hdr = fits.getheader(fpath)
+        return data, hdr
+    else:
+        return data
+
+# functions for saving python objects
+def save_pickle(fpath, data, quiet=False):
+    out = open(str(fpath), 'wb')
+    pickle.dump(data, out)
+    out.close()
+    if not quiet: print('Saved data to: ', str(fpath))
+
+def load_pickle(fpath):
+    infile = open(str(fpath),'rb')
+    pkl_data = pickle.load(infile)
+    infile.close()
+    return pkl_data
+
 def rotate_arr(arr, rotation, reshape=False, order=3):
     if arr.dtype == complex:
         arr_r = _scipy.ndimage.rotate(xp.real(arr), angle=rotation, reshape=reshape, order=order)
@@ -90,35 +126,6 @@ def lstsq(modes, data):
     modes = modes[:, mask.ravel()].T  # transpose moves modes to columns, as needed for least squares fit
     c, *_ = xp.linalg.lstsq(modes, data, rcond=None)
     return c
-
-def save_fits(fpath, data, header=None, ow=True, quiet=False):
-    if header is not None:
-        keys = list(header.keys())
-        hdr = fits.Header()
-        for i in range(len(header)):
-            hdr[keys[i]] = header[keys[i]]
-    else: 
-        hdr = None
-    
-    data = ensure_np_array(data)
-    
-    hdu = fits.PrimaryHDU(data=data, header=hdr)
-    hdu.writeto(str(fpath), overwrite=ow) 
-    if not quiet: print('Saved data to: ', str(fpath))
-
-# functions for saving python objects
-def save_pickle(fpath, data, quiet=False):
-    out = open(str(fpath), 'wb')
-    pickle.dump(data, out)
-    out.close()
-    if not quiet: print('Saved data to: ', str(fpath))
-
-def load_pickle(fpath):
-    infile = open(str(fpath),'rb')
-    pkl_data = pickle.load(infile)
-    infile.close()
-    return pkl_data
-
 
 def generate_wfe(diam, 
                  npix=256, oversample=1, 
