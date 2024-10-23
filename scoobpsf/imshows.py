@@ -1,5 +1,5 @@
 from .math_module import xp, _scipy, ensure_np_array
-from . import utils
+import scoobpsf.utils as utils
 
 import numpy as np
 import scipy
@@ -11,6 +11,7 @@ plt.rcParams['image.origin'] = 'lower'
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from matplotlib.colors import LogNorm, Normalize
 from IPython.display import display, clear_output
+
 
 def imshow1(arr, 
             title=None, 

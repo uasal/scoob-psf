@@ -1,5 +1,5 @@
-from .math_module import xp,_scipy, ensure_np_array
-import scoobpsf.utils as utils
+from .math_module import xp, _scipy, ensure_np_array
+import stppsf.utils as utils
 
 import numpy as np
 import scipy
@@ -74,8 +74,8 @@ class DeformableMirror(poppy.AnalyticOpticalElement):
         x = self.inf_sampling*(xp.linspace(-self.Nact//2, self.Nact//2-1, self.Nact) + 1/2)
         y = self.inf_sampling*(xp.linspace(-self.Nact//2, self.Nact//2-1, self.Nact) + 1/2)
 
-        self.Mx = xp.exp(-1j*2*np.pi*xp.outer(fx,x))
-        self.My = xp.exp(-1j*2*np.pi*xp.outer(y,fy))
+        self.Mx = xp.exp(-1j*2*np.pi * xp.outer(fx,x))
+        self.My = xp.exp(-1j*2*np.pi * xp.outer(y,fy))
 
         self.pxscl_tol = 1e-6
 
@@ -126,7 +126,7 @@ class DeformableMirror(poppy.AnalyticOpticalElement):
     def get_surface(self):
         mft_command = self.Mx@self.command@self.My
         fourier_surf = self.inf_fun_fft * mft_command
-        surf = xp.fft.ifftshift(xp.fft.ifft2(xp.fft.fftshift(fourier_surf,))).real
+        surf = xp.fft.fftshift(xp.fft.ifft2(xp.fft.ifftshift(fourier_surf,))).real
         return surf
     
     # METHODS TO BE COMPATABLE WITH POPPY

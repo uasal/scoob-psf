@@ -15,18 +15,18 @@ class single():
     def __init__(self,
                  wavelength=633e-9*u.m, 
                  entrance_flux=None, 
-                 scc_sep=(1.55/np.sqrt(2) * 3.7*u.mm, 1.55/np.sqrt(2) * 3.7*u.mm),
-                 scc_diam=100*u.um, 
+                 scc_sep=(6*u.mm/np.sqrt(2), 6*u.mm/np.sqrt(2)),
+                 scc_diam=300*u.um, 
                  ):
         self.wavelength_c = 633e-9*u.m
         self.dm_beam_diam = 9.2*u.mm # as measured in the Fresnel model
         self.lyot_pupil_diam = 9.2*u.mm
-        self.lyot_diam = 8.7*u.mm
+        self.lyot_diam = 8.6*u.mm
         self.lyot_ratio = (self.lyot_diam/self.lyot_pupil_diam).decompose().value
         self.rls_diam = 25.4*u.mm
         self.imaging_fl = 140*u.mm
         self.llowfsc_fl = 200*u.mm
-        self.llowfsc_defocus = 1.75*u.mm
+        self.llowfsc_defocus = 2.5*u.mm
         self.psf_pixelscale = 3.76*u.um / u.pix
         self.psf_pixelscale_lamDc = 0.307
         self.llowfsc_pixelscale = 3.76*u.um / u.pix
@@ -45,7 +45,7 @@ class single():
         self.Ndef = int(self.npix*self.def_oversample)
         self.Nrls = int(self.npix*self.rls_oversample)
         self.npsf = 150
-        self.nlocam = 64
+        self.nlocam = 60
 
         ### INITIALIZE APERTURES ###
         pwf = poppy.FresnelWavefront(beam_radius=self.dm_beam_diam/2, npix=self.npix, oversample=1)
@@ -58,6 +58,7 @@ class single():
         rls_ap = poppy.CircularAperture(radius=self.rls_diam/2).get_transmission(rls_wf)
         self.RLS = rls_ap - utils.pad_or_crop( self.LYOTSTOP, self.Nrls) - utils.pad_or_crop( self.MSCC_PINHOLE, self.Nrls)
         rls_ap = 0
+        self.oap_ap = poppy.CircularAperture(radius=15*u.mm/2).get_transmission(rls_wf)
         self.use_locam = False
 
         self.LYOT = self.LYOTSTOP
@@ -144,6 +145,18 @@ class single():
         
     def get_dm(self):
         return self.DM.command
+    
+    def use_scc(self, use=True):
+        if use:
+            self.scc_on = True
+            self.N = self.Ndef
+            self.oversample = self.def_oversample
+            self.LYOT = self.LYOT_MSCC
+        else:
+            self.scc_on = False
+            self.N = self.Ndef
+            self.oversample = self.def_oversample
+            self.LYOT = self.LYOTSTOP
 
     def use_llowfsc(self, use=True):
         if use:
@@ -156,7 +169,6 @@ class single():
             self.N = self.Ndef
             self.oversample = self.def_oversample
             self.LYOT = self.LYOTSTOP
-        
 
     def apply_vortex(self, pupwf, plot=False):
         lres_wf = utils.pad_or_crop(pupwf, self.N_vortex_lres) # pad to the larger array for the low res propagation
@@ -195,23 +207,25 @@ class single():
 
         wf *= self.WFE
         if save_wfs: wfs.append(copy.copy(wf))
-        if plot: imshows.imshow2(xp.abs(wf), xp.angle(wf), cmap2='twilight', npix=int(1.5*self.npix))
+        if plot: imshows.imshow2(xp.abs(wf), xp.angle(wf), 'EP WF', cmap2='twilight', npix=int(1.5*self.npix))
 
         dm_surf = utils.pad_or_crop(self.DM.get_surface(), self.npix)
-        wf *= xp.exp(1j*4*np.pi*self.wavelength.to_value(u.m) * dm_surf)
+        wf *= xp.exp(1j*4*xp.pi/self.wavelength.to_value(u.m) * dm_surf)
         if save_wfs: wfs.append(copy.copy(wf))
-        if plot: imshows.imshow2(xp.abs(wf), xp.angle(wf), cmap2='twilight', npix=int(1.5*self.npix))
+        if plot: imshows.imshow2(xp.abs(wf), xp.angle(wf), 'After DM WF', cmap2='twilight', npix=int(1.5*self.npix))
 
-        if self.use_vortex:
-            wf = self.apply_vortex(wf, plot=plot)
+        if self.use_vortex: wf = self.apply_vortex(wf, plot=plot)
         if save_wfs: wfs.append(copy.copy(wf))
-        print(wf.shape)
-
-        wf *= utils.pad_or_crop(self.LYOT, wf.shape[0]).astype(complex)
-        if save_wfs: wfs.append(copy.copy(wf))
-        if plot: imshows.imshow2(xp.abs(wf), xp.angle(wf), cmap2='twilight')
 
         if self.use_locam:
+            wf = props.ang_spec(wf, self.wavelength, -150*u.mm, self.lyot_pupil_diam/(self.npix*u.pix))
+            wf *= self.oap_ap
+            wf = props.ang_spec(wf, self.wavelength, 150*u.mm, self.lyot_pupil_diam/(self.npix*u.pix))
+
+            wf *= utils.pad_or_crop(self.LYOT, wf.shape[0]).astype(complex)
+            if save_wfs: wfs.append(copy.copy(wf))
+            if plot: imshows.imshow2(xp.abs(wf), xp.angle(wf), 'After Lyot Stop WF', cmap2='twilight')
+
             # Use TF and MFT to propagate to defocused image
             fnum = self.llowfsc_fl.to_value(u.mm)/self.lyot_diam.to_value(u.mm)
             tf = props.get_fresnel_TF(self.llowfsc_defocus.to_value(u.m) * self.rls_oversample**2, 
@@ -225,11 +239,14 @@ class single():
                 return wfs
             else:
                 return wf
+            
+        wf *= utils.pad_or_crop(self.LYOT, wf.shape[0]).astype(complex)
+        if save_wfs: wfs.append(copy.copy(wf))
+        if plot: imshows.imshow2(xp.abs(wf), xp.angle(wf), 'After Lyot Stop WF', cmap2='twilight', npix=int(1.5*self.npix))
 
         wf = props.mft_forward(wf, self.npix*self.lyot_ratio, self.npsf, self.psf_pixelscale_lamD)
-        wf /= xp.sqrt(self.Imax_ref) # normalize by a reference maximum value
         if save_wfs: wfs.append(copy.copy(wf))
-        if plot: imshows.imshow2(xp.abs(wf)**2, xp.angle(wf), cmap2='twilight',)
+        if plot: imshows.imshow2(xp.abs(wf)**2, xp.angle(wf), 'Image Plane WF', cmap2='twilight',)
 
         if save_wfs:
             return wfs
@@ -237,12 +254,19 @@ class single():
             return wf
     
     def calc_wf(self):
-        fpwf = self.calc_wfs(save_wfs=False)
+        self.use_llowfsc(False)
+        fpwf = self.calc_wfs(save_wfs=False) / xp.sqrt(self.Imax_ref)
         return fpwf
     
     def snap(self):
-        image = xp.abs(self.calc_wfs(save_wfs=False))**2
+        self.use_llowfsc(False)
+        image = xp.abs(self.calc_wfs(save_wfs=False))**2 / self.Imax_ref
         return image
+    
+    def snap_locam(self):
+        self.use_llowfsc()
+        locam_im = xp.abs(self.calc_wfs(save_wfs=False))**2
+        return locam_im
 
 class multi():
     '''
