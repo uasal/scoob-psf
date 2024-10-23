@@ -130,18 +130,10 @@ class single():
         self.set_dm(xp.zeros((self.Nact,self.Nact)))
     
     def set_dm(self, command):
-        if command.shape[0]==self.Nacts:
-            dm_command = self.DM.map_actuators_to_command(xp.asarray(command))
-        else: 
-            dm_command = xp.asarray(command)
-        self.DM.command = dm_command
+        self.DM.command = command
         
     def add_dm(self, command):
-        if command.shape[0]==self.Nacts:
-            dm_command = self.DM.map_actuators_to_command(xp.asarray(command))
-        else: 
-            dm_command = xp.asarray(command)
-        self.DM.command += dm_command
+        self.DM.command += command
         
     def get_dm(self):
         return self.DM.command
