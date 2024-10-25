@@ -50,6 +50,11 @@ class MODEL():
         self.LYOT = poppy.CircularAperture(radius=self.lyot_ratio*self.dm_beam_diam/2).get_transmission(pwf)
         self.WFE = xp.ones((self.npix,self.npix), dtype=complex)
 
+        self.det_rotation = 0
+        self.flip_dm = False
+        self.flip_lyot_ud = False
+        self.flip_lyot_lr = False
+
         self.Nact = 34
         self.dm_shape = (self.Nact, self.Nact)
         self.act_spacing = 300e-6*u.m
@@ -100,12 +105,7 @@ class MODEL():
         r = xp.sqrt(x**2 + y**2)
         self.hres_dot_mask = r>=0.15
 
-        self.det_rotation = 0
-        self.flip_dm = False
-        self.flip_lyot = False
-
         self.use_vortex = True
-        self.use_wfe = True
         self.dm_command = xp.zeros((self.Nact, self.Nact))
     
     @property
@@ -149,11 +149,13 @@ class MODEL():
             wf = (pupil_wf_lres + pupil_wf_hres)
             if plot: imshows.imshow2(xp.abs(wf), xp.angle(wf), 'Total Lyot WF', npix=1.5*self.npix)
 
-        if self.flip_lyot: wf = xp.rot90(xp.rot90(wf))
+        if self.flip_lyot_ud: wf = xp.flipud(wf)
+        if self.flip_lyot_lr: wf = xp.fliplr(wf)
         wf *= utils.pad_or_crop(self.LYOT, self.N)
         if plot: imshows.imshow2(xp.abs(wf), xp.angle(wf), 'After Lyot Stop WF', npix=1.5*self.npix)
         
         wf = props.mft_forward(wf, self.npix * self.lyot_ratio, self.npsf, self.psf_pixelscale_lamD)
+        wf = _scipy.ndimage.rotate(wf, self.det_rotation, reshape=False, order=5)
         if plot: imshows.imshow2(xp.abs(wf)**2, xp.angle(wf), 'At SCICAM WF', lognorm1=True)
 
         if return_ints:
@@ -205,7 +207,7 @@ def val_and_grad(del_acts, M, actuators, E_ab, r_cond, control_mask, verbose=Fal
     delE = E_ab + E_DM
     delE_vec = delE[control_mask] # make sure to do array indexing
     J_delE = delE_vec.dot(delE_vec.conjugate()).real
-    J_c = r_cond * del_acts.dot(del_acts) / (M.wavelength_c.to_value(u.m))**2
+    J_c = r_cond * del_acts_waves.dot(del_acts_waves)
     J = (J_delE + J_c) / E_ab_l2norm
     if verbose: 
         print(f'\tCost-function J_delE: {J_delE:.3f}')
@@ -215,13 +217,16 @@ def val_and_grad(del_acts, M, actuators, E_ab, r_cond, control_mask, verbose=Fal
 
     # Compute the gradient with the adjoint model
     delE_masked = control_mask * delE # still a 2D array
-    dJ_dE_DMs = 2 * delE_masked / E_ab_l2norm
+    delE_masked = _scipy.ndimage.rotate(delE_masked, -M.det_rotation, reshape=False, order=5)
+    dJ_dE_DM = 2 * delE_masked / E_ab_l2norm
 
-    dJ_dE_LS = props.mft_reverse(dJ_dE_DMs, M.psf_pixelscale_lamD, M.npix * M.lyot_ratio, M.N, convention='+')
+    dJ_dE_LS = props.mft_reverse(dJ_dE_DM, M.psf_pixelscale_lamD, M.npix * M.lyot_ratio, M.N, convention='+')
     if plot: imshows.imshow2(xp.abs(dJ_dE_LS), xp.angle(dJ_dE_LS), 'RMAD Lyot Stop', npix=1.5*M.npix)
 
     dJ_dE_LP = dJ_dE_LS * utils.pad_or_crop(M.LYOT, M.N)
-    if M.flip_lyot: dJ_dE_LP = xp.rot90(xp.rot90(dJ_dE_LP))
+    # if M.flip_lyot: dJ_dE_LP = xp.rot90(xp.rot90(dJ_dE_LP))
+    if M.flip_lyot_lr: dJ_dE_LP = xp.fliplr(dJ_dE_LP)
+    if M.flip_lyot_ud: dJ_dE_LP = xp.flipud(dJ_dE_LP)
     if plot: imshows.imshow2(xp.abs(dJ_dE_LP), xp.angle(dJ_dE_LP), 'RMAD Lyot Pupil', npix=1.5*M.npix)
 
     # Now we have to split and back-propagate the gradient along the two branches used to model 
@@ -252,7 +257,7 @@ def val_and_grad(del_acts, M, actuators, E_ab, r_cond, control_mask, verbose=Fal
     x1_bar = M.inf_fun_fft.conjugate() * x2_bar
     dJ_dA = M.Mx_back@x1_bar@M.My_back / ( M.Nsurf * M.Nact * M.Nact ) # why I have to divide by this constant is beyond me
     if plot: imshows.imshow2(dJ_dA.real, dJ_dA.imag, 'RMAD DM Actuators')
-    dJ_dA = dJ_dA[M.dm_mask].real + xp.array( r_cond * 2*del_acts / (M.wavelength_c.to_value(u.m))**2 )
+    dJ_dA = dJ_dA[M.dm_mask].real + xp.array( r_cond * 2*del_acts_waves )
 
     return ensure_np_array(J), ensure_np_array(dJ_dA)
 
