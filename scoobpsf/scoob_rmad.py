@@ -2,6 +2,7 @@ from .math_module import xp, _scipy, ensure_np_array
 import scoobpsf.utils as utils
 import scoobpsf.imshows as imshows
 import scoobpsf.props as props
+import scoobpsf.dm as dm
 
 import numpy as np
 import astropy.units as u
@@ -43,13 +44,14 @@ class MODEL():
         self.oversample = 2.048
         self.N = int(self.npix*self.oversample)
 
-        pwf = poppy.FresnelWavefront(beam_radius=self.pupil_diam/2, npix=self.npix, oversample=1) # pupil wavefront
-        self.APERTURE = poppy.CircularAperture(radius=self.pupil_diam/2).get_transmission(pwf)
+        pwf = poppy.FresnelWavefront(beam_radius=self.dm_beam_diam/2, npix=self.npix, oversample=1) # pupil wavefront
+        self.APERTURE = poppy.CircularAperture(radius=self.dm_beam_diam/2).get_transmission(pwf)
         self.APMASK = self.APERTURE>0
-        self.LYOT = poppy.CircularAperture(radius=self.lyot_ratio*self.pupil_diam/2).get_transmission(pwf)
+        self.LYOT = poppy.CircularAperture(radius=self.lyot_ratio*self.dm_beam_diam/2).get_transmission(pwf)
         self.WFE = xp.ones((self.npix,self.npix), dtype=complex)
 
         self.Nact = 34
+        self.dm_shape = (self.Nact, self.Nact)
         self.act_spacing = 300e-6*u.m
         self.dm_pxscl = self.dm_beam_diam.to_value(u.m)/self.npix
         self.inf_sampling = self.act_spacing.to_value(u.m)/self.dm_pxscl
@@ -59,6 +61,7 @@ class MODEL():
         y,x = (xp.indices((self.Nact, self.Nact)) - self.Nact//2 + 1/2)
         r = xp.sqrt(x**2 + y**2)
         self.dm_mask = r<(self.Nact/2 + 1/2)
+        self.dm_mask[25,21] = False
         self.Nacts = int(self.dm_mask.sum())
 
         self.inf_fun_fft = xp.fft.fftshift(xp.fft.fft2(xp.fft.ifftshift(self.inf_fun,)))
@@ -84,14 +87,14 @@ class MODEL():
         self.lres_win_size = int(30/self.lres_sampling)
         w1d = xp.array(windows.tukey(self.lres_win_size, 1, False))
         self.lres_window = utils.pad_or_crop(xp.outer(w1d, w1d), self.N_vortex_lres)
-        self.vortex_lres = props.make_vortex_phase_mask(self.N_vortex_lres)
+        self.vortex_lres = props.make_vortex_phase_mask(self.N_vortex_lres) * xp.exp(1j*xp.pi*15/180)
 
         self.hres_sampling = 0.025 # lam/D per pixel; this value is chosen empirically
         self.N_vortex_hres = int(np.round(30/self.hres_sampling))
         self.hres_win_size = int(30/self.hres_sampling)
         w1d = xp.array(windows.tukey(self.hres_win_size, 1, False))
         self.hres_window = utils.pad_or_crop(xp.outer(w1d, w1d), self.N_vortex_hres)
-        self.vortex_hres = props.make_vortex_phase_mask(self.N_vortex_hres)
+        self.vortex_hres = props.make_vortex_phase_mask(self.N_vortex_hres) * xp.exp(1j*xp.pi*15/180)
 
         y,x = (xp.indices((self.N_vortex_hres, self.N_vortex_hres)) - self.N_vortex_hres//2)*self.hres_sampling
         r = xp.sqrt(x**2 + y**2)
@@ -120,15 +123,15 @@ class MODEL():
         mft_command = self.Mx@dm_command@self.My
         fourier_surf = self.inf_fun_fft * mft_command
         dm_surf = xp.fft.fftshift(xp.fft.ifft2(xp.fft.ifftshift(fourier_surf,))).real
-        dm_phasor = xp.exp(1j * 4*xp.pi/self.wavelength.to_value(u.m) * dm_surf)
-        if self.flip_dm: dm_phasor = xp.rot90(xp.rot90(dm_phasor))
+        DM_PHASOR = xp.exp(1j * 4*xp.pi/self.wavelength.to_value(u.m) * utils.pad_or_crop(dm_surf, self.N))
+        if self.flip_dm: DM_PHASOR = xp.rot90(xp.rot90(DM_PHASOR))
 
         # Initialize the wavefront
         E_EP = utils.pad_or_crop(self.APERTURE.astype(xp.complex128), self.N) * utils.pad_or_crop(self.WFE, self.N) / xp.sqrt(self.Imax_ref)
-        if plot: imshows.imshow2(xp.abs(wf), xp.angle(wf), npix=1.5*self.npix)
+        if plot: imshows.imshow2(xp.abs(E_EP), xp.angle(E_EP), 'EP WF', npix=1.5*self.npix)
 
-        wf = E_EP * utils.pad_or_crop(dm_phasor, self.N)
-        if plot: imshows.imshow2(xp.abs(wf), xp.angle(wf), npix=1.5*self.npix)
+        wf = E_EP * utils.pad_or_crop(DM_PHASOR, self.N)
+        if plot: imshows.imshow2(xp.abs(wf), xp.angle(wf), 'After DM WF', npix=1.5*self.npix)
 
         if use_vortex:
             lres_wf = utils.pad_or_crop(wf, self.N_vortex_lres) # pad to the larger array for the low res propagation
@@ -136,27 +139,33 @@ class MODEL():
             fp_wf_lres *= self.vortex_lres * (1 - self.lres_window) # apply low res FPM and inverse Tukey window
             pupil_wf_lres = props.ifft(fp_wf_lres)
             pupil_wf_lres = utils.pad_or_crop(pupil_wf_lres, self.N)
-            if plot: imshows.imshow2(xp.abs(pupil_wf_lres), xp.angle(pupil_wf_lres), npix=1.5*self.npix)
+            if plot: imshows.imshow2(xp.abs(pupil_wf_lres), xp.angle(pupil_wf_lres), 'FFT Lyot WF', npix=1.5*self.npix)
 
             fp_wf_hres = props.mft_forward(wf, self.npix, self.N_vortex_hres, self.hres_sampling, convention='-')
             fp_wf_hres *= self.vortex_hres * self.hres_window * self.hres_dot_mask # apply high res FPM, window, and dot mask
             pupil_wf_hres = props.mft_reverse(fp_wf_hres, self.hres_sampling, self.npix, self.N, convention='+')
-            if plot: imshows.imshow2(xp.abs(pupil_wf_hres), xp.angle(pupil_wf_hres), npix=1.5*self.npix)
+            if plot: imshows.imshow2(xp.abs(pupil_wf_hres), xp.angle(pupil_wf_hres), 'MFT Lyot WF', npix=1.5*self.npix)
 
             wf = (pupil_wf_lres + pupil_wf_hres)
-            if plot: imshows.imshow2(xp.abs(wf), xp.angle(wf), npix=1.5*self.npix)
+            if plot: imshows.imshow2(xp.abs(wf), xp.angle(wf), 'Total Lyot WF', npix=1.5*self.npix)
 
         if self.flip_lyot: wf = xp.rot90(xp.rot90(wf))
         wf *= utils.pad_or_crop(self.LYOT, self.N)
-        if plot: imshows.imshow2(xp.abs(wf), xp.angle(wf), npix=1.5*self.npix)
+        if plot: imshows.imshow2(xp.abs(wf), xp.angle(wf), 'After Lyot Stop WF', npix=1.5*self.npix)
         
         wf = props.mft_forward(wf, self.npix * self.lyot_ratio, self.npsf, self.psf_pixelscale_lamD)
-        if plot: imshows.imshow2(xp.abs(wf)**2, xp.angle(wf), lognorm1=True)
+        if plot: imshows.imshow2(xp.abs(wf)**2, xp.angle(wf), 'At SCICAM WF', lognorm1=True)
 
         if return_ints:
-            return wf, E_EP, dm_phasor
+            return wf, E_EP, DM_PHASOR
         else:
             return wf
+        
+    def getattr(self, attr):
+        return getattr(self, attr)
+    
+    def setattr(self, attr, val):
+        setattr(self, attr, val)
         
     def zero_dm(self):
         self.dm_command = xp.zeros((self.Nact,self.Nact))
@@ -196,7 +205,7 @@ def val_and_grad(del_acts, M, actuators, E_ab, r_cond, control_mask, verbose=Fal
     delE = E_ab + E_DM
     delE_vec = delE[control_mask] # make sure to do array indexing
     J_delE = delE_vec.dot(delE_vec.conjugate()).real
-    J_c = del_acts_waves.dot(del_acts_waves) * r_cond
+    J_c = r_cond * del_acts.dot(del_acts) / (M.wavelength_c.to_value(u.m))**2
     J = (J_delE + J_c) / E_ab_l2norm
     if verbose: 
         print(f'\tCost-function J_delE: {J_delE:.3f}')
@@ -243,7 +252,7 @@ def val_and_grad(del_acts, M, actuators, E_ab, r_cond, control_mask, verbose=Fal
     x1_bar = M.inf_fun_fft.conjugate() * x2_bar
     dJ_dA = M.Mx_back@x1_bar@M.My_back / ( M.Nsurf * M.Nact * M.Nact ) # why I have to divide by this constant is beyond me
     if plot: imshows.imshow2(dJ_dA.real, dJ_dA.imag, 'RMAD DM Actuators')
-    dJ_dA = dJ_dA[M.dm_mask].real + xp.array( 2*del_acts_waves * r_cond)
+    dJ_dA = dJ_dA[M.dm_mask].real + xp.array( r_cond * 2*del_acts / (M.wavelength_c.to_value(u.m))**2 )
 
     return ensure_np_array(J), ensure_np_array(dJ_dA)
 
