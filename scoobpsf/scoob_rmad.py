@@ -54,6 +54,7 @@ class MODEL():
         self.flip_dm = False
         self.flip_lyot_ud = False
         self.flip_lyot_lr = False
+        self.xp_rotation = 0
 
         self.Nact = 34
         self.dm_shape = (self.Nact, self.Nact)
@@ -130,39 +131,42 @@ class MODEL():
         E_EP = utils.pad_or_crop(self.APERTURE.astype(xp.complex128), self.N) * utils.pad_or_crop(self.WFE, self.N) / xp.sqrt(self.Imax_ref)
         if plot: imshows.imshow2(xp.abs(E_EP), xp.angle(E_EP), 'EP WF', npix=1.5*self.npix)
 
-        wf = E_EP * utils.pad_or_crop(DM_PHASOR, self.N)
-        if plot: imshows.imshow2(xp.abs(wf), xp.angle(wf), 'After DM WF', npix=1.5*self.npix)
+        E_DM = E_EP * utils.pad_or_crop(DM_PHASOR, self.N)
+        if plot: imshows.imshow2(xp.abs(E_DM), xp.angle(E_DM), 'After DM WF', npix=1.5*self.npix)
 
         if use_vortex:
-            lres_wf = utils.pad_or_crop(wf, self.N_vortex_lres) # pad to the larger array for the low res propagation
+            lres_wf = utils.pad_or_crop(E_DM, self.N_vortex_lres) # pad to the larger array for the low res propagation
             fp_wf_lres = props.fft(lres_wf)
             fp_wf_lres *= self.vortex_lres * (1 - self.lres_window) # apply low res FPM and inverse Tukey window
             pupil_wf_lres = props.ifft(fp_wf_lres)
             pupil_wf_lres = utils.pad_or_crop(pupil_wf_lres, self.N)
             if plot: imshows.imshow2(xp.abs(pupil_wf_lres), xp.angle(pupil_wf_lres), 'FFT Lyot WF', npix=1.5*self.npix)
 
-            fp_wf_hres = props.mft_forward(wf, self.npix, self.N_vortex_hres, self.hres_sampling, convention='-')
+            fp_wf_hres = props.mft_forward(E_DM, self.npix, self.N_vortex_hres, self.hres_sampling, convention='-')
             fp_wf_hres *= self.vortex_hres * self.hres_window * self.hres_dot_mask # apply high res FPM, window, and dot mask
             pupil_wf_hres = props.mft_reverse(fp_wf_hres, self.hres_sampling, self.npix, self.N, convention='+')
             if plot: imshows.imshow2(xp.abs(pupil_wf_hres), xp.angle(pupil_wf_hres), 'MFT Lyot WF', npix=1.5*self.npix)
 
-            wf = (pupil_wf_lres + pupil_wf_hres)
-            if plot: imshows.imshow2(xp.abs(wf), xp.angle(wf), 'Total Lyot WF', npix=1.5*self.npix)
+            E_LP = (pupil_wf_lres + pupil_wf_hres)
+            if plot: imshows.imshow2(xp.abs(E_LP), xp.angle(E_LP), 'Total Lyot WF', npix=1.5*self.npix)
+        else:
+            E_LP = E_DM
 
-        if self.flip_lyot_ud: wf = xp.flipud(wf)
-        if self.flip_lyot_lr: wf = xp.fliplr(wf)
-        # wf = _scipy.ndimage.rotate(wf, self.xp_rotation)
-        wf *= utils.pad_or_crop(self.LYOT, self.N)
-        if plot: imshows.imshow2(xp.abs(wf), xp.angle(wf), 'After Lyot Stop WF', npix=1.5*self.npix)
+        if self.flip_lyot_ud: E_LP = xp.flipud(E_LP)
+        if self.flip_lyot_lr: E_LP = xp.fliplr(E_LP)
+        E_LP = _scipy.ndimage.rotate(E_LP, self.xp_rotation, reshape=False)
+
+        E_LS = utils.pad_or_crop(self.LYOT, self.N) * E_LP
+        if plot: imshows.imshow2(xp.abs(E_LS), xp.angle(E_LS), 'After Lyot Stop WF', npix=1.5*self.npix)
         
-        wf = props.mft_forward(wf, self.npix * self.lyot_ratio, self.npsf, self.psf_pixelscale_lamD)
-        wf = _scipy.ndimage.rotate(wf, self.det_rotation, reshape=False, order=5)
-        if plot: imshows.imshow2(xp.abs(wf)**2, xp.angle(wf), 'At SCICAM WF', lognorm1=True)
+        fpwf = props.mft_forward(E_LS, self.npix * self.lyot_ratio, self.npsf, self.psf_pixelscale_lamD)
+        # fpwf = _scipy.ndimage.rotate(fpwf, self.det_rotation, reshape=False, order=5)
+        if plot: imshows.imshow2(xp.abs(fpwf)**2, xp.angle(fpwf), 'At SCICAM WF', lognorm1=True)
 
         if return_ints:
-            return wf, E_EP, DM_PHASOR
+            return fpwf, E_EP, DM_PHASOR, E_LP, E_LS
         else:
-            return wf
+            return fpwf
         
     def getattr(self, attr):
         return getattr(self, attr)
@@ -200,7 +204,7 @@ def val_and_grad(del_acts, M, actuators, E_ab, r_cond, control_mask, verbose=Fal
     E_ab_l2norm = E_ab[control_mask].dot(E_ab[control_mask].conjugate()).real
 
     # Compute E_dm using the forward DM model
-    E_FP_NOM, E_EP, DM_PHASOR = M.forward(actuators, use_vortex=True, return_ints=True) # make sure to do the array indexing
+    E_FP_NOM, E_EP, DM_PHASOR, _, _ = M.forward(actuators, use_vortex=True, return_ints=True) # make sure to do the array indexing
     E_FP_w_DM = M.forward(actuators + del_acts, use_vortex=True) # make sure to do the array indexing
     E_DM = E_FP_w_DM - E_FP_NOM
 
