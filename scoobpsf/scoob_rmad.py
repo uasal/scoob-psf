@@ -151,6 +151,7 @@ class MODEL():
 
         if self.flip_lyot_ud: wf = xp.flipud(wf)
         if self.flip_lyot_lr: wf = xp.fliplr(wf)
+        # wf = _scipy.ndimage.rotate(wf, self.xp_rotation)
         wf *= utils.pad_or_crop(self.LYOT, self.N)
         if plot: imshows.imshow2(xp.abs(wf), xp.angle(wf), 'After Lyot Stop WF', npix=1.5*self.npix)
         
@@ -224,9 +225,9 @@ def val_and_grad(del_acts, M, actuators, E_ab, r_cond, control_mask, verbose=Fal
     if plot: imshows.imshow2(xp.abs(dJ_dE_LS), xp.angle(dJ_dE_LS), 'RMAD Lyot Stop', npix=1.5*M.npix)
 
     dJ_dE_LP = dJ_dE_LS * utils.pad_or_crop(M.LYOT, M.N)
-    # if M.flip_lyot: dJ_dE_LP = xp.rot90(xp.rot90(dJ_dE_LP))
-    if M.flip_lyot_lr: dJ_dE_LP = xp.fliplr(dJ_dE_LP)
-    if M.flip_lyot_ud: dJ_dE_LP = xp.flipud(dJ_dE_LP)
+    # if M.flip_lyot_lr: dJ_dE_LP = xp.fliplr(dJ_dE_LP)
+    # if M.flip_lyot_ud: dJ_dE_LP = xp.flipud(dJ_dE_LP)
+    dJ_dE_LP = _scipy.ndimage.rotate(dJ_dE_LP, -M.xp_rotation)
     if plot: imshows.imshow2(xp.abs(dJ_dE_LP), xp.angle(dJ_dE_LP), 'RMAD Lyot Pupil', npix=1.5*M.npix)
 
     # Now we have to split and back-propagate the gradient along the two branches used to model 
