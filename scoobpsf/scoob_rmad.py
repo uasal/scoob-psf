@@ -52,9 +52,8 @@ class MODEL():
 
         self.det_rotation = 0
         self.flip_dm = False
-        self.flip_lyot_ud = False
-        self.flip_lyot_lr = False
-        self.xp_rotation = 0
+        self.reverse_lyot = False
+        self.flip_lyot = False
 
         self.Nact = 34
         self.dm_shape = (self.Nact, self.Nact)
@@ -93,14 +92,14 @@ class MODEL():
         self.lres_win_size = int(30/self.lres_sampling)
         w1d = xp.array(windows.tukey(self.lres_win_size, 1, False))
         self.lres_window = utils.pad_or_crop(xp.outer(w1d, w1d), self.N_vortex_lres)
-        self.vortex_lres = props.make_vortex_phase_mask(self.N_vortex_lres) * xp.exp(1j*xp.pi*15/180)
+        self.vortex_lres = props.make_vortex_phase_mask(self.N_vortex_lres)
 
         self.hres_sampling = 0.025 # lam/D per pixel; this value is chosen empirically
         self.N_vortex_hres = int(np.round(30/self.hres_sampling))
         self.hres_win_size = int(30/self.hres_sampling)
         w1d = xp.array(windows.tukey(self.hres_win_size, 1, False))
         self.hres_window = utils.pad_or_crop(xp.outer(w1d, w1d), self.N_vortex_hres)
-        self.vortex_hres = props.make_vortex_phase_mask(self.N_vortex_hres) * xp.exp(1j*xp.pi*15/180)
+        self.vortex_hres = props.make_vortex_phase_mask(self.N_vortex_hres)
 
         y,x = (xp.indices((self.N_vortex_hres, self.N_vortex_hres)) - self.N_vortex_hres//2)*self.hres_sampling
         r = xp.sqrt(x**2 + y**2)
@@ -125,14 +124,14 @@ class MODEL():
         fourier_surf = self.inf_fun_fft * mft_command
         dm_surf = xp.fft.fftshift(xp.fft.ifft2(xp.fft.ifftshift(fourier_surf,))).real
         DM_PHASOR = xp.exp(1j * 4*xp.pi/self.wavelength.to_value(u.m) * utils.pad_or_crop(dm_surf, self.N))
-        if self.flip_dm: DM_PHASOR = xp.rot90(xp.rot90(DM_PHASOR))
+        # if self.flip_dm: DM_PHASOR = xp.rot90(xp.rot90(DM_PHASOR))
 
         # Initialize the wavefront
         E_EP = utils.pad_or_crop(self.APERTURE.astype(xp.complex128), self.N) * utils.pad_or_crop(self.WFE, self.N) / xp.sqrt(self.Imax_ref)
-        if plot: imshows.imshow2(xp.abs(E_EP), xp.angle(E_EP), 'EP WF', npix=1.5*self.npix)
+        if plot: imshows.imshow2(xp.abs(E_EP), xp.angle(E_EP), 'EP WF', npix=1.5*self.npix, cmap2='twilight')
 
         E_DM = E_EP * utils.pad_or_crop(DM_PHASOR, self.N)
-        if plot: imshows.imshow2(xp.abs(E_DM), xp.angle(E_DM), 'After DM WF', npix=1.5*self.npix)
+        if plot: imshows.imshow2(xp.abs(E_DM), xp.angle(E_DM), 'After DM WF', npix=1.5*self.npix, cmap2='twilight')
 
         if use_vortex:
             lres_wf = utils.pad_or_crop(E_DM, self.N_vortex_lres) # pad to the larger array for the low res propagation
@@ -140,28 +139,26 @@ class MODEL():
             fp_wf_lres *= self.vortex_lres * (1 - self.lres_window) # apply low res FPM and inverse Tukey window
             pupil_wf_lres = props.ifft(fp_wf_lres)
             pupil_wf_lres = utils.pad_or_crop(pupil_wf_lres, self.N)
-            if plot: imshows.imshow2(xp.abs(pupil_wf_lres), xp.angle(pupil_wf_lres), 'FFT Lyot WF', npix=1.5*self.npix)
+            if plot: imshows.imshow2(xp.abs(pupil_wf_lres), xp.angle(pupil_wf_lres), 'FFT Lyot WF', npix=1.5*self.npix, cmap2='twilight')
 
             fp_wf_hres = props.mft_forward(E_DM, self.npix, self.N_vortex_hres, self.hres_sampling, convention='-')
             fp_wf_hres *= self.vortex_hres * self.hres_window * self.hres_dot_mask # apply high res FPM, window, and dot mask
             pupil_wf_hres = props.mft_reverse(fp_wf_hres, self.hres_sampling, self.npix, self.N, convention='+')
-            if plot: imshows.imshow2(xp.abs(pupil_wf_hres), xp.angle(pupil_wf_hres), 'MFT Lyot WF', npix=1.5*self.npix)
+            if plot: imshows.imshow2(xp.abs(pupil_wf_hres), xp.angle(pupil_wf_hres), 'MFT Lyot WF', npix=1.5*self.npix, cmap2='twilight')
 
             E_LP = (pupil_wf_lres + pupil_wf_hres)
-            if plot: imshows.imshow2(xp.abs(E_LP), xp.angle(E_LP), 'Total Lyot WF', npix=1.5*self.npix)
+            if plot: imshows.imshow2(xp.abs(E_LP), xp.angle(E_LP), 'Total Lyot WF', npix=1.5*self.npix, cmap2='twilight')
         else:
             E_LP = E_DM
 
-        if self.flip_lyot_ud: E_LP = xp.flipud(E_LP)
-        if self.flip_lyot_lr: E_LP = xp.fliplr(E_LP)
-        E_LP = _scipy.ndimage.rotate(E_LP, self.xp_rotation, reshape=False)
-
+        if self.reverse_lyot: E_LP = xp.rot90(xp.rot90(E_LP))
+        if self.flip_lyot: E_LP = xp.fliplr(E_LP)
         E_LS = utils.pad_or_crop(self.LYOT, self.N) * E_LP
-        if plot: imshows.imshow2(xp.abs(E_LS), xp.angle(E_LS), 'After Lyot Stop WF', npix=1.5*self.npix)
+        if plot: imshows.imshow2(xp.abs(E_LS), xp.angle(E_LS), 'After Lyot Stop WF', npix=1.5*self.npix, cmap2='twilight')
         
         fpwf = props.mft_forward(E_LS, self.npix * self.lyot_ratio, self.npsf, self.psf_pixelscale_lamD)
-        # fpwf = _scipy.ndimage.rotate(fpwf, self.det_rotation, reshape=False, order=5)
-        if plot: imshows.imshow2(xp.abs(fpwf)**2, xp.angle(fpwf), 'At SCICAM WF', lognorm1=True)
+        fpwf = _scipy.ndimage.rotate(fpwf, self.det_rotation, reshape=False, order=5)
+        if plot: imshows.imshow2(xp.abs(fpwf)**2, xp.angle(fpwf), 'At SCICAM WF', lognorm1=True, cmap2='twilight')
 
         if return_ints:
             return fpwf, E_EP, DM_PHASOR, E_LP, E_LS
@@ -226,34 +223,33 @@ def val_and_grad(del_acts, M, actuators, E_ab, r_cond, control_mask, verbose=Fal
     dJ_dE_DM = 2 * delE_masked / E_ab_l2norm
 
     dJ_dE_LS = props.mft_reverse(dJ_dE_DM, M.psf_pixelscale_lamD, M.npix * M.lyot_ratio, M.N, convention='+')
-    if plot: imshows.imshow2(xp.abs(dJ_dE_LS), xp.angle(dJ_dE_LS), 'RMAD Lyot Stop', npix=1.5*M.npix)
+    if plot: imshows.imshow2(xp.abs(dJ_dE_LS), xp.angle(dJ_dE_LS), 'RMAD Lyot Stop', npix=1.5*M.npix, cmap2='twilight')
 
     dJ_dE_LP = dJ_dE_LS * utils.pad_or_crop(M.LYOT, M.N)
-    # if M.flip_lyot_lr: dJ_dE_LP = xp.fliplr(dJ_dE_LP)
-    # if M.flip_lyot_ud: dJ_dE_LP = xp.flipud(dJ_dE_LP)
-    dJ_dE_LP = _scipy.ndimage.rotate(dJ_dE_LP, -M.xp_rotation)
-    if plot: imshows.imshow2(xp.abs(dJ_dE_LP), xp.angle(dJ_dE_LP), 'RMAD Lyot Pupil', npix=1.5*M.npix)
+    if M.flip_lyot: dJ_dE_LP = xp.fliplr(dJ_dE_LP)
+    if M.reverse_lyot: dJ_dE_LP = xp.rot90(xp.rot90(dJ_dE_LP))
+    if plot: imshows.imshow2(xp.abs(dJ_dE_LP), xp.angle(dJ_dE_LP), 'RMAD Lyot Pupil', npix=1.5*M.npix, cmap2='twilight')
 
-    # Now we have to split and back-propagate the gradient along the two branches used to model 
-    # the vortex. So one branch for the FFT vortex procedure and one for the MFT vortex procedure. 
+    # Now we have to split and back-propagate the gradient along the two branches used to model the vortex.
+    # So one branch for the FFT vortex procedure and one for the MFT vortex procedure. 
     dJ_dE_LP_fft = utils.pad_or_crop(copy.copy(dJ_dE_LP), M.N_vortex_lres)
     dJ_dE_FPM_fft = props.fft(dJ_dE_LP_fft)
     dJ_dE_FP_fft = M.vortex_lres.conj() * (1 - M.lres_window) * dJ_dE_FPM_fft
     dJ_dE_PUP_fft = props.ifft(dJ_dE_FP_fft)
     dJ_dE_PUP_fft = utils.pad_or_crop(dJ_dE_PUP_fft, M.N)
-    if plot: imshows.imshow2(xp.abs(dJ_dE_PUP_fft), xp.angle(dJ_dE_PUP_fft), 'RMAD FFT Pupil', npix=1.5*M.npix)
+    if plot: imshows.imshow2(xp.abs(dJ_dE_PUP_fft), xp.angle(dJ_dE_PUP_fft), 'RMAD FFT Pupil', npix=1.5*M.npix, cmap2='twilight')
 
     dJ_dE_LP_mft = utils.pad_or_crop(copy.copy(dJ_dE_LP), M.N)
     dJ_dE_FPM_mft = props.mft_forward(dJ_dE_LP_mft,  M.npix, M.N_vortex_hres, M.hres_sampling, convention='-')
     dJ_dE_FP_mft = M.vortex_hres.conj() * M.hres_window * M.hres_dot_mask * dJ_dE_FPM_mft
     dJ_dE_PUP_mft = props.mft_reverse(dJ_dE_FP_mft, M.hres_sampling, M.npix, M.N, convention='+')
-    if plot: imshows.imshow2(xp.abs(dJ_dE_PUP_mft), xp.angle(dJ_dE_PUP_mft), 'RMAD MFT Pupil', npix=1.5*M.npix)
+    if plot: imshows.imshow2(xp.abs(dJ_dE_PUP_mft), xp.angle(dJ_dE_PUP_mft), 'RMAD MFT Pupil', npix=1.5*M.npix, cmap2='twilight')
 
     dJ_dE_PUP = dJ_dE_PUP_fft + dJ_dE_PUP_mft
-    if plot: imshows.imshow2(xp.abs(dJ_dE_PUP), xp.angle(dJ_dE_PUP), 'RMAD Total Pupil', npix=1.5*M.npix)
+    if plot: imshows.imshow2(xp.abs(dJ_dE_PUP), xp.angle(dJ_dE_PUP), 'RMAD Total Pupil', npix=1.5*M.npix, cmap2='twilight')
 
     dJ_dS_DM = 4*xp.pi / M.wavelength.to_value(u.m) * xp.imag(dJ_dE_PUP * E_EP.conj() * DM_PHASOR.conj())
-    if M.flip_dm: dJ_dS_DM = xp.rot90(xp.rot90(dJ_dS_DM))
+    # if M.flip_dm: dJ_dS_DM = xp.rot90(xp.rot90(dJ_dS_DM))
     if plot: imshows.imshow2(xp.real(dJ_dS_DM), xp.imag(dJ_dS_DM), 'RMAD DM Surface', npix=1.5*M.npix)
 
     # Now pad back to the array size fo the DM surface to back propagate through the adjoint DM model
