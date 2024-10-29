@@ -22,15 +22,19 @@ def acts_to_command(acts, dm_mask):
     return command
 
 class MODEL():
-    def __init__(self):
+    def __init__(self, 
+                 dm_beam_diam=9.2*u.mm,
+                 lyot_pupil_diam=9.2*u.mm,
+                 lyot_stop_diam=8.6*u.mm,
+                 ):
 
         # initialize physical parameters
         self.wavelength_c = 633e-9*u.m
-        self.dm_beam_diam = 9.2*u.mm
-        self.lyot_pupil_diam = 9.2*u.mm
-        self.lyot_stop_diam = 8.6*u.mm
+        self.dm_beam_diam = dm_beam_diam
+        self.lyot_pupil_diam = lyot_pupil_diam
+        self.lyot_stop_diam = lyot_stop_diam
         self.lyot_ratio = (self.lyot_stop_diam / self.lyot_pupil_diam).decompose().value
-        self.control_rad = 34/2 * 9.2/10.2 * self.lyot_ratio
+        self.control_rad = 34/2 * self.dm_beam_diam.to_value(u.mm)/10.2 * self.lyot_ratio
         self.psf_pixelscale_lamDc = 0.307
         self.psf_pixelscale_lamD = self.psf_pixelscale_lamDc
         self.npsf = 150
@@ -44,6 +48,9 @@ class MODEL():
         self.oversample = 2.048
         self.N = int(self.npix*self.oversample)
 
+        self.dm_pxscl = self.dm_beam_diam.to_value(u.m)/self.npix
+        self.lyot_pxscl = self.lyot_pupil_diam.to_value(u.m)/self.npix
+
         pwf = poppy.FresnelWavefront(beam_radius=self.dm_beam_diam/2, npix=self.npix, oversample=1) # pupil wavefront
         self.APERTURE = poppy.CircularAperture(radius=self.dm_beam_diam/2).get_transmission(pwf)
         self.APMASK = self.APERTURE>0
@@ -55,10 +62,12 @@ class MODEL():
         self.reverse_lyot = False
         self.flip_lyot = False
 
+        self.dm_shift = np.array([0, 0])*u.mm
+        self.lyot_shift = np.array([0, 0])*u.mm
+
         self.Nact = 34
         self.dm_shape = (self.Nact, self.Nact)
         self.act_spacing = 300e-6*u.m
-        self.dm_pxscl = self.dm_beam_diam.to_value(u.m)/self.npix
         self.inf_sampling = self.act_spacing.to_value(u.m)/self.dm_pxscl
         self.inf_fun = dm.make_gaussian_inf_fun(act_spacing=self.act_spacing, sampling=self.inf_sampling, coupling=0.15, Nact=self.Nact+2)
         self.Nsurf = self.inf_fun.shape[0]
@@ -124,6 +133,8 @@ class MODEL():
         fourier_surf = self.inf_fun_fft * mft_command
         dm_surf = xp.fft.fftshift(xp.fft.ifft2(xp.fft.ifftshift(fourier_surf,))).real
         DM_PHASOR = xp.exp(1j * 4*xp.pi/self.wavelength.to_value(u.m) * utils.pad_or_crop(dm_surf, self.N))
+        self.dm_shift_pix = self.dm_shift.to_value(u.m) / self.dm_pxscl
+        DM_PHASOR = _scipy.ndimage.shift(DM_PHASOR, self.dm_shift, order=5)
         # if self.flip_dm: DM_PHASOR = xp.rot90(xp.rot90(DM_PHASOR))
 
         # Initialize the wavefront
@@ -153,6 +164,9 @@ class MODEL():
 
         if self.reverse_lyot: E_LP = xp.rot90(xp.rot90(E_LP))
         if self.flip_lyot: E_LP = xp.fliplr(E_LP)
+        self.lyot_shift_pix = self.lyot_shift.to_value(u.m) / self.lyot_pxscl
+        E_LP = _scipy.ndimage.shift(E_LP, self.lyot_shift_pix, order=5)
+
         E_LS = utils.pad_or_crop(self.LYOT, self.N) * E_LP
         if plot: imshows.imshow2(xp.abs(E_LS), xp.angle(E_LS), 'After Lyot Stop WF', npix=1.5*self.npix, cmap2='twilight')
         
