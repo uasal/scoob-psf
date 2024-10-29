@@ -134,7 +134,7 @@ class MODEL():
         dm_surf = xp.fft.fftshift(xp.fft.ifft2(xp.fft.ifftshift(fourier_surf,))).real
         DM_PHASOR = xp.exp(1j * 4*xp.pi/self.wavelength.to_value(u.m) * utils.pad_or_crop(dm_surf, self.N))
         self.dm_shift_pix = self.dm_shift.to_value(u.m) / self.dm_pxscl
-        DM_PHASOR = _scipy.ndimage.shift(DM_PHASOR, self.dm_shift, order=5)
+        DM_PHASOR = _scipy.ndimage.shift(DM_PHASOR, np.flip(self.dm_shift_pix), order=5)
         # if self.flip_dm: DM_PHASOR = xp.rot90(xp.rot90(DM_PHASOR))
 
         # Initialize the wavefront
@@ -165,7 +165,7 @@ class MODEL():
         if self.reverse_lyot: E_LP = xp.rot90(xp.rot90(E_LP))
         if self.flip_lyot: E_LP = xp.fliplr(E_LP)
         self.lyot_shift_pix = self.lyot_shift.to_value(u.m) / self.lyot_pxscl
-        E_LP = _scipy.ndimage.shift(E_LP, self.lyot_shift_pix, order=5)
+        E_LP = _scipy.ndimage.shift(E_LP, np.flip(self.lyot_shift_pix), order=5)
 
         E_LS = utils.pad_or_crop(self.LYOT, self.N) * E_LP
         if plot: imshows.imshow2(xp.abs(E_LS), xp.angle(E_LS), 'After Lyot Stop WF', npix=1.5*self.npix, cmap2='twilight')
