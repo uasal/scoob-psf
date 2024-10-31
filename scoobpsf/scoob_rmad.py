@@ -238,6 +238,7 @@ def val_and_grad(del_acts, M, actuators, E_ab, r_cond, control_mask, verbose=Fal
     delE_masked = control_mask * delE # still a 2D array
     delE_masked = _scipy.ndimage.rotate(delE_masked, -M.det_rotation, reshape=False, order=5)
     dJ_dE_DM = 2 * delE_masked / E_ab_l2norm
+    if plot: imshows.imshow2(xp.abs(dJ_dE_DM)**2, xp.angle(dJ_dE_DM), 'RMAD DM E-Field', lognorm1=True, vmin1=xp.max(xp.abs(dJ_dE_DM)**2)/1e3, cmap2='twilight')
 
     dJ_dE_LS = props.mft_reverse(dJ_dE_DM, M.psf_pixelscale_lamD, M.npix * M.lyot_ratio, M.N, convention='+')
     if plot: imshows.imshow2(xp.abs(dJ_dE_LS), xp.angle(dJ_dE_LS), 'RMAD Lyot Stop', npix=1.5*M.npix, cmap2='twilight')
