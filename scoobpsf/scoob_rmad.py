@@ -209,7 +209,7 @@ class MODEL():
         im = xp.abs( self.calc_wf() )**2
         return im
 
-def val_and_grad(del_acts, M, actuators, E_ab, r_cond, control_mask, verbose=False, plot=False):
+def val_and_grad(del_acts, M, actuators, E_ab, r_cond, control_mask, verbose=False, plot=False, fancy_plot=False):
     # Convert array arguments into correct types
     actuators = ensure_np_array(actuators)
     del_acts_waves = del_acts/M.wavelength_c.to_value(u.m)
@@ -276,9 +276,143 @@ def val_and_grad(del_acts, M, actuators, E_ab, r_cond, control_mask, verbose=Fal
     x1_bar = M.inf_fun_fft.conjugate() * x2_bar
     dJ_dA = M.Mx_back@x1_bar@M.My_back / ( M.Nsurf * M.Nact * M.Nact ) # why I have to divide by this constant is beyond me
     if plot: imshows.imshow2(dJ_dA.real, dJ_dA.imag, 'RMAD DM Actuators')
+    
     dJ_dA = dJ_dA[M.dm_mask].real + xp.array( r_cond * 2*del_acts_waves )
 
+    if fancy_plot: fancy_plot_adjoint(dJ_dE_DM, dJ_dE_LP, dJ_dE_PUP, dJ_dS_DM, dJ_dA, control_mask, M.dm_mask)
+        
     return ensure_np_array(J), ensure_np_array(dJ_dA)
+
+import matplotlib.pyplot as plt
+from matplotlib.gridspec import GridSpec
+from matplotlib.colors import LogNorm
+
+def fancy_plot_forward(command, E_EP, DM_PHASOR, E_LP, LYOT, fpwf, npix=1000, wavelength=633e-9):
+    dm_surf = ensure_np_array(wavelength/(4*xp.pi) * utils.pad_or_crop(xp.angle(DM_PHASOR), 1.5*npix) )
+    E_PUP = ensure_np_array(utils.pad_or_crop(E_EP * DM_PHASOR, 1.5*npix))
+    E_LP = ensure_np_array(utils.pad_or_crop(E_LP, 1.5*npix))
+    LYOT = ensure_np_array(utils.pad_or_crop(LYOT, int(1.5*npix)))
+    fpwf = ensure_np_array(fpwf)
+
+    fig = plt.figure(figsize=(20,10), dpi=125)
+    gs = GridSpec(2, 5, figure=fig)
+
+    title_fz = 16
+
+    ax = fig.add_subplot(gs[:, 0])
+    ax.imshow(ensure_np_array(command), cmap='viridis')
+    ax.set_title('DM Command', fontsize=title_fz)
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+    ax = fig.add_subplot(gs[:, 1])
+    ax.imshow(dm_surf, cmap='viridis',)
+    ax.set_title('DM Surface', fontsize=title_fz)
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+    ax = fig.add_subplot(gs[0, 2])
+    ax.imshow(np.abs(E_PUP), cmap='plasma')
+    ax.set_title('Total Pupil Amplitude', fontsize=title_fz)
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+    ax = fig.add_subplot(gs[1, 2])
+    ax.imshow(np.angle(E_PUP), cmap='twilight')
+    ax.set_title('Total Pupil Phase', fontsize=title_fz)
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+    ax = fig.add_subplot(gs[0, 3])
+    ax.imshow(np.abs(E_LP), cmap='plasma')
+    ax.set_title('Lyot Pupil Amplitude', fontsize=title_fz)
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+    ax = fig.add_subplot(gs[1, 3])
+    ax.imshow(np.angle(E_LP), cmap='twilight')
+    ax.set_title('Lyot Pupil Phase', fontsize=title_fz)
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+    ax = fig.add_subplot(gs[0, 4])
+    ax.imshow(np.abs(fpwf)**2, cmap='magma', norm=LogNorm(vmin=1e-8))
+    ax.set_title('Focal Plane Intensity', fontsize=title_fz)
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+    ax = fig.add_subplot(gs[1, 4])
+    ax.imshow(np.angle(fpwf), cmap='twilight')
+    ax.set_title('Focal Plane Phase', fontsize=title_fz)
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+    plt.subplots_adjust(hspace=-0.3)
+
+def fancy_plot_adjoint(dJ_dE_DM, dJ_dE_LP, dJ_dE_PUP, dJ_dS_DM, dJ_dA, control_mask, dm_mask, npix=1000):
+
+    control_mask = ensure_np_array(control_mask)
+    dJ_dE_DM = ensure_np_array(dJ_dE_DM)
+    dJ_dE_LP = ensure_np_array(utils.pad_or_crop(dJ_dE_LP, 1.5*npix))
+    dJ_dE_PUP = ensure_np_array(utils.pad_or_crop(dJ_dE_PUP, 1.5*npix))
+    dJ_dS_DM = ensure_np_array(utils.pad_or_crop(dJ_dS_DM, int(1.5*npix)))
+    dm_grad = ensure_np_array(acts_to_command(dJ_dA, dm_mask))
+
+    fig = plt.figure(figsize=(20,10), dpi=125)
+    gs = GridSpec(2, 5, figure=fig)
+
+    title_fz = 26
+
+    ax = fig.add_subplot(gs[0, 0])
+    ax.imshow(control_mask * np.abs(dJ_dE_DM)**2, cmap='magma', norm=LogNorm(vmin=1e-5))
+    ax.set_title(r'$| \frac{\partial J}{\partial E_{DM}} |^2$', fontsize=title_fz)
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+    ax = fig.add_subplot(gs[1, 0])
+    ax.imshow(control_mask * np.angle(dJ_dE_DM), cmap='twilight',)
+    ax.set_title(r'$\angle \frac{\partial J}{\partial E_{DM}} $', fontsize=title_fz)
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+    ax = fig.add_subplot(gs[0, 1])
+    ax.imshow(np.abs(dJ_dE_LP), cmap='plasma')
+    ax.set_title(r'$| \frac{\partial J}{\partial E_{LP}} |$', fontsize=title_fz)
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+    ax = fig.add_subplot(gs[1, 1])
+    ax.imshow(np.angle(dJ_dE_LP), cmap='twilight')
+    ax.set_title(r'$\angle \frac{\partial J}{\partial E_{LP}} $', fontsize=title_fz)
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+    ax = fig.add_subplot(gs[0, 2])
+    ax.imshow(np.abs(dJ_dE_PUP), cmap='plasma')
+    ax.set_title(r'$| \frac{\partial J}{\partial E_{PUP}} |$', fontsize=title_fz)
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+    ax = fig.add_subplot(gs[1, 2])
+    ax.imshow(np.angle(dJ_dE_PUP), cmap='twilight')
+    ax.set_title(r'$\angle \frac{\partial J}{\partial E_{PUP}} $', fontsize=title_fz)
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+    ax = fig.add_subplot(gs[:, 3])
+    ax.imshow(dJ_dS_DM.real, cmap='viridis')
+    ax.set_title(r'$ \frac{\partial J}{\partial S_{DM}} $', fontsize=title_fz)
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+    ax = fig.add_subplot(gs[:, 4])
+    ax.imshow(dm_grad, cmap='viridis')
+    ax.set_title(r'$ \frac{\partial J}{\partial A} $', fontsize=title_fz)
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+    plt.subplots_adjust(hspace=-0.2)
+
 
 
 
