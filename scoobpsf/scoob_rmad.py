@@ -42,6 +42,7 @@ class MODEL():
         self.npsf = 150
 
         self.wavelength = 633e-9*u.m
+        self.waves = None
 
         self.Imax_ref = 1
 
@@ -131,7 +132,7 @@ class MODEL():
         self._wavelength = wl
         self.psf_pixelscale_lamD = self.psf_pixelscale_lamDc * (self.wavelength_c/wl).decompose().value
 
-    def forward(self, actuators, use_vortex=True, return_ints=False, plot=False):
+    def forward(self, actuators, use_vortex=True, return_ints=False, plot=False, fancy_plot=False):
         dm_command = xp.zeros((self.Nact,self.Nact))
         dm_command[self.dm_mask] = xp.array(actuators)
         mft_command = self.Mx@dm_command@self.My
@@ -177,6 +178,8 @@ class MODEL():
         fpwf = _scipy.ndimage.rotate(fpwf, self.det_rotation, reshape=False, order=5)
         if plot: imshows.imshow2(xp.abs(fpwf)**2, xp.angle(fpwf), 'At SCICAM WF', lognorm1=True, cmap2='twilight')
 
+        if fancy_plot: fancy_plot_forward(dm_command, E_EP, DM_PHASOR, E_LP, fpwf, npix=self.npix, wavelength=self.wavelength.to_value(u.m))
+        # command, E_EP, DM_PHASOR, E_LP, LYOT, fpwf, npix=1000, wavelength=633e-9
         if return_ints:
             return fpwf, E_EP, DM_PHASOR, E_LP, E_LS
         else:
@@ -200,13 +203,21 @@ class MODEL():
     def get_dm(self,):
         return copy.copy(self.dm_command)
         
-    def calc_wf(self):
+    def calc_wf(self, wave=633e-9*u.m):
+        self.wavelength = wave
         actuators = self.dm_command[self.dm_mask]
         fpwf = self.forward(actuators, use_vortex=self.use_vortex,)
+        self.wavelength = self.wavelength_c # reset to central wavelength
         return fpwf
         
     def snap(self):
-        im = xp.abs( self.calc_wf() )**2
+        if self.waves is None: 
+            im = xp.abs( self.calc_wf() )**2
+        else:
+            Nwaves = len(self.waves)
+            im = 0.0
+            for i in range(Nwaves):
+                im += xp.abs( self.calc_wf(self.waves[i]) )**2 / Nwaves
         return im
 
 def val_and_grad(del_acts, M, actuators, E_ab, r_cond, control_mask, verbose=False, plot=False, fancy_plot=False):
@@ -214,7 +225,7 @@ def val_and_grad(del_acts, M, actuators, E_ab, r_cond, control_mask, verbose=Fal
     actuators = ensure_np_array(actuators)
     del_acts_waves = del_acts/M.wavelength_c.to_value(u.m)
     E_ab = xp.array(E_ab)
-    
+
     E_ab_l2norm = E_ab[control_mask].dot(E_ab[control_mask].conjugate()).real
 
     # Compute E_dm using the forward DM model
@@ -280,18 +291,40 @@ def val_and_grad(del_acts, M, actuators, E_ab, r_cond, control_mask, verbose=Fal
     dJ_dA = dJ_dA[M.dm_mask].real + xp.array( r_cond * 2*del_acts_waves )
 
     if fancy_plot: fancy_plot_adjoint(dJ_dE_DM, dJ_dE_LP, dJ_dE_PUP, dJ_dS_DM, dJ_dA, control_mask, M.dm_mask)
-        
+    
     return ensure_np_array(J), ensure_np_array(dJ_dA)
+
+def val_and_grad_bb(del_acts, M, actuators, E_abs, r_cond, control_mask, waves, verbose=False, plot=False, fancy_plot=False):
+    Nwaves = len(waves)
+    E_abs = xp.array(E_abs)
+    del_acts_waves = del_acts/M.wavelength_c.to_value(u.m)
+
+    J_monos = np.zeros(Nwaves)
+    dJ_dA_monos = np.zeros((Nwaves, M.Nacts))
+    for i in range(Nwaves):
+        M.wavelength = waves[i]
+        E_ab = E_abs[i]
+        J_mono, dJ_dA_mono = val_and_grad(del_acts, M, actuators, E_ab, 0, control_mask, verbose=verbose, plot=plot, fancy_plot=fancy_plot)
+        # print(J_mono, dJ_dA_mono.shape)
+        J_monos[i] = J_mono
+        dJ_dA_monos[i] = dJ_dA_mono
+
+    J_bb = np.sum(J_monos)/Nwaves + r_cond * del_acts_waves.dot(del_acts_waves)
+    dJ_dA_bb = np.sum(dJ_dA_monos, axis=0) + ensure_np_array( r_cond * 2*del_acts_waves )
+    
+    # imshows.imshow2(acts_to_command(xp.array(dJ_dA_bb), M.dm_mask), acts_to_command(dJ_dA_monos[2] - dJ_dA_monos[0], M.dm_mask) )
+    M.wavelength = M.wavelength_c # reset back to central wavelength
+
+    return J_bb, dJ_dA_bb
 
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 from matplotlib.colors import LogNorm
 
-def fancy_plot_forward(command, E_EP, DM_PHASOR, E_LP, LYOT, fpwf, npix=1000, wavelength=633e-9):
+def fancy_plot_forward(command, E_EP, DM_PHASOR, E_LP, fpwf, npix=1000, wavelength=633e-9):
     dm_surf = ensure_np_array(wavelength/(4*xp.pi) * utils.pad_or_crop(xp.angle(DM_PHASOR), 1.5*npix) )
     E_PUP = ensure_np_array(utils.pad_or_crop(E_EP * DM_PHASOR, 1.5*npix))
     E_LP = ensure_np_array(utils.pad_or_crop(E_LP, 1.5*npix))
-    LYOT = ensure_np_array(utils.pad_or_crop(LYOT, int(1.5*npix)))
     fpwf = ensure_np_array(fpwf)
 
     fig = plt.figure(figsize=(20,10), dpi=125)
