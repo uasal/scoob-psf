@@ -31,18 +31,16 @@ class MODEL():
                  ):
 
         # initialize physical parameters
-        self.wavelength_c = 633e-9*u.m
+        self.wavelength_c = 633e-9
+        self.waves = np.array([self.wavelength_c])
+        
         self.dm_beam_diam = dm_beam_diam
         self.lyot_pupil_diam = lyot_pupil_diam
         self.lyot_stop_diam = lyot_stop_diam
         self.lyot_ratio = (self.lyot_stop_diam / self.lyot_pupil_diam).decompose().value
         self.control_rad = 34/2 * self.dm_beam_diam.to_value(u.mm)/10.2 * self.lyot_ratio
         self.psf_pixelscale_lamDc = 0.307
-        self.psf_pixelscale_lamD = self.psf_pixelscale_lamDc
         self.npsf = 150
-
-        self.wavelength = 633e-9*u.m
-        self.waves = None
 
         self.Imax_ref = 1
 
@@ -123,22 +121,13 @@ class MODEL():
         self.use_vortex = True
         self.dm_command = xp.zeros((self.Nact, self.Nact))
     
-    @property
-    def wavelength(self):
-        return self._wavelength
-
-    @wavelength.setter
-    def wavelength(self, wl):
-        self._wavelength = wl
-        self.psf_pixelscale_lamD = self.psf_pixelscale_lamDc * (self.wavelength_c/wl).decompose().value
-
-    def forward(self, actuators, use_vortex=True, return_ints=False, plot=False, fancy_plot=False):
+    def forward(self, actuators, wavelength=633e-9, use_vortex=True, return_ints=False, plot=False, fancy_plot=False):
         dm_command = xp.zeros((self.Nact,self.Nact))
         dm_command[self.dm_mask] = xp.array(actuators)
         mft_command = self.Mx@dm_command@self.My
         fourier_surf = self.inf_fun_fft * mft_command
         dm_surf = xp.fft.fftshift(xp.fft.ifft2(xp.fft.ifftshift(fourier_surf,))).real
-        DM_PHASOR = xp.exp(1j * 4*xp.pi/self.wavelength.to_value(u.m) * utils.pad_or_crop(dm_surf, self.N))
+        DM_PHASOR = xp.exp(1j * 4*xp.pi/wavelength * utils.pad_or_crop(dm_surf, self.N))
         DM_PHASOR = _scipy.ndimage.shift(DM_PHASOR, np.flip(self.dm_shift_pix), order=5)
         # if self.flip_dm: DM_PHASOR = xp.rot90(xp.rot90(DM_PHASOR))
 
@@ -174,11 +163,12 @@ class MODEL():
         E_LS = utils.pad_or_crop(self.LYOT, self.N) * E_LP
         if plot: imshows.imshow2(xp.abs(E_LS), xp.angle(E_LS), 'After Lyot Stop WF', npix=1.5*self.npix, cmap2='twilight')
         
-        fpwf = props.mft_forward(E_LS, self.npix * self.lyot_ratio, self.npsf, self.psf_pixelscale_lamD)
+        psf_pixelscale_lamD = self.psf_pixelscale_lamDc * self.wavelength_c/wavelength
+        fpwf = props.mft_forward(E_LS, self.npix * self.lyot_ratio, self.npsf, psf_pixelscale_lamD)
         fpwf = _scipy.ndimage.rotate(fpwf, self.det_rotation, reshape=False, order=5)
         if plot: imshows.imshow2(xp.abs(fpwf)**2, xp.angle(fpwf), 'At SCICAM WF', lognorm1=True, cmap2='twilight')
 
-        if fancy_plot: fancy_plot_forward(dm_command, E_EP, DM_PHASOR, E_LP, fpwf, npix=self.npix, wavelength=self.wavelength.to_value(u.m))
+        if fancy_plot: fancy_plot_forward(dm_command, E_EP, DM_PHASOR, E_LP, fpwf, npix=self.npix, wavelength=wavelength)
         # command, E_EP, DM_PHASOR, E_LP, LYOT, fpwf, npix=1000, wavelength=633e-9
         if return_ints:
             return fpwf, E_EP, DM_PHASOR, E_LP, E_LS
@@ -203,34 +193,31 @@ class MODEL():
     def get_dm(self,):
         return copy.copy(self.dm_command)
         
-    def calc_wf(self, wave=633e-9*u.m):
-        self.wavelength = wave
+    def calc_wf(self, wavelength=633e-9):
         actuators = self.dm_command[self.dm_mask]
-        fpwf = self.forward(actuators, use_vortex=self.use_vortex,)
-        self.wavelength = self.wavelength_c # reset to central wavelength
+        fpwf = self.forward(actuators, wavelength, use_vortex=self.use_vortex,)
         return fpwf
         
     def snap(self):
-        if self.waves is None: 
-            im = xp.abs( self.calc_wf() )**2
-        else:
-            Nwaves = len(self.waves)
-            im = 0.0
-            for i in range(Nwaves):
-                im += xp.abs( self.calc_wf(self.waves[i]) )**2 / Nwaves
+        Nwaves = len(self.waves)
+        im = 0.0
+        for i in range(Nwaves):
+            actuators = self.dm_command[self.dm_mask]
+            fpwf = self.forward(actuators, self.waves[i], use_vortex=self.use_vortex,)
+            im += xp.abs( fpwf )**2 / Nwaves
         return im
 
-def val_and_grad(del_acts, M, actuators, E_ab, r_cond, control_mask, verbose=False, plot=False, fancy_plot=False):
+def val_and_grad(del_acts, M, actuators, E_ab, control_mask, wavelength, r_cond, verbose=False, plot=False, fancy_plot=False):
     # Convert array arguments into correct types
     actuators = ensure_np_array(actuators)
-    del_acts_waves = del_acts/M.wavelength_c.to_value(u.m)
+    del_acts_waves = del_acts/M.wavelength_c
     E_ab = xp.array(E_ab)
 
     E_ab_l2norm = E_ab[control_mask].dot(E_ab[control_mask].conjugate()).real
 
     # Compute E_dm using the forward DM model
-    E_FP_NOM, E_EP, DM_PHASOR, _, _ = M.forward(actuators, use_vortex=True, return_ints=True) # make sure to do the array indexing
-    E_FP_w_DM = M.forward(actuators + del_acts, use_vortex=True) # make sure to do the array indexing
+    E_FP_NOM, E_EP, DM_PHASOR, _, _ = M.forward(actuators, wavelength, use_vortex=True, return_ints=True) # make sure to do the array indexing
+    E_FP_w_DM = M.forward(actuators + del_acts, wavelength, use_vortex=True) # make sure to do the array indexing
     E_DM = E_FP_w_DM - E_FP_NOM
 
     # compute the cost function
@@ -251,7 +238,8 @@ def val_and_grad(del_acts, M, actuators, E_ab, r_cond, control_mask, verbose=Fal
     dJ_dE_DM = 2 * delE_masked / E_ab_l2norm
     if plot: imshows.imshow2(xp.abs(dJ_dE_DM)**2, xp.angle(dJ_dE_DM), 'RMAD DM E-Field', lognorm1=True, vmin1=xp.max(xp.abs(dJ_dE_DM)**2)/1e3, cmap2='twilight')
 
-    dJ_dE_LS = props.mft_reverse(dJ_dE_DM, M.psf_pixelscale_lamD, M.npix * M.lyot_ratio, M.N, convention='+')
+    psf_pixelscale_lamD = M.psf_pixelscale_lamDc * M.wavelength_c/wavelength
+    dJ_dE_LS = props.mft_reverse(dJ_dE_DM, psf_pixelscale_lamD, M.npix * M.lyot_ratio, M.N, convention='+')
     if plot: imshows.imshow2(xp.abs(dJ_dE_LS), xp.angle(dJ_dE_LS), 'RMAD Lyot Stop', npix=1.5*M.npix, cmap2='twilight')
 
     dJ_dE_LP = dJ_dE_LS * utils.pad_or_crop(M.LYOT, M.N)
@@ -277,7 +265,7 @@ def val_and_grad(del_acts, M, actuators, E_ab, r_cond, control_mask, verbose=Fal
     dJ_dE_PUP = dJ_dE_PUP_fft + dJ_dE_PUP_mft
     if plot: imshows.imshow2(xp.abs(dJ_dE_PUP), xp.angle(dJ_dE_PUP), 'RMAD Total Pupil', npix=1.5*M.npix, cmap2='twilight')
 
-    dJ_dS_DM = 4*xp.pi / M.wavelength.to_value(u.m) * xp.imag(dJ_dE_PUP * E_EP.conj() * DM_PHASOR.conj())
+    dJ_dS_DM = 4*xp.pi / wavelength * xp.imag(dJ_dE_PUP * E_EP.conj() * DM_PHASOR.conj())
     # if M.flip_dm: dJ_dS_DM = xp.rot90(xp.rot90(dJ_dS_DM))
     if plot: imshows.imshow2(xp.real(dJ_dS_DM), xp.imag(dJ_dS_DM), 'RMAD DM Surface', npix=1.5*M.npix)
 
@@ -294,27 +282,29 @@ def val_and_grad(del_acts, M, actuators, E_ab, r_cond, control_mask, verbose=Fal
     
     return ensure_np_array(J), ensure_np_array(dJ_dA)
 
-def val_and_grad_bb(del_acts, M, actuators, E_abs, r_cond, control_mask, waves, verbose=False, plot=False, fancy_plot=False):
+def val_and_grad_bb(del_acts, M, actuators, E_abs, control_mask, waves, r_cond, weights=None, verbose=False, plot=False, fancy_plot=False):
+    # del_acts, M, actuators, E_ab, control_mask, wavelength, r_cond,
     Nwaves = len(waves)
     E_abs = xp.array(E_abs)
-    del_acts_waves = del_acts/M.wavelength_c.to_value(u.m)
+    del_acts_waves = del_acts/M.wavelength_c
 
+    r_cond_mono = 0
     J_monos = np.zeros(Nwaves)
     dJ_dA_monos = np.zeros((Nwaves, M.Nacts))
     for i in range(Nwaves):
-        M.wavelength = waves[i]
+        wavelength = waves[i]
         E_ab = E_abs[i]
-        J_mono, dJ_dA_mono = val_and_grad(del_acts, M, actuators, E_ab, 0, control_mask, verbose=verbose, plot=plot, fancy_plot=fancy_plot)
+        J_mono, dJ_dA_mono = val_and_grad(del_acts, M, actuators, E_ab, control_mask, wavelength, r_cond_mono, verbose=verbose, plot=plot, fancy_plot=fancy_plot)
         # print(J_mono, dJ_dA_mono.shape)
         J_monos[i] = J_mono
         dJ_dA_monos[i] = dJ_dA_mono
 
+    if weights is None: 
+        weights = np.array(Nwaves*[1])
+        # TODO: implement weights for each wavelength correctly
     J_bb = np.sum(J_monos)/Nwaves + r_cond * del_acts_waves.dot(del_acts_waves)
     dJ_dA_bb = np.sum(dJ_dA_monos, axis=0) + ensure_np_array( r_cond * 2*del_acts_waves )
     
-    # imshows.imshow2(acts_to_command(xp.array(dJ_dA_bb), M.dm_mask), acts_to_command(dJ_dA_monos[2] - dJ_dA_monos[0], M.dm_mask) )
-    M.wavelength = M.wavelength_c # reset back to central wavelength
-
     return J_bb, dJ_dA_bb
 
 import matplotlib.pyplot as plt
