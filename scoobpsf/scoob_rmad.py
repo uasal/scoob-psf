@@ -62,7 +62,8 @@ class MODEL():
         self.APMASK = self.APERTURE>0
         self.LYOT = poppy.CircularAperture(radius=self.lyot_ratio*self.dm_beam_diam/2).get_transmission(pwf)
         self.LYOT = _scipy.ndimage.shift(self.LYOT, np.flip(self.lyot_shift_pix), order=1)
-        self.WFE = xp.ones((self.npix,self.npix), dtype=complex)
+        self.AMP = xp.ones((self.npix,self.npix))
+        self.OPD = xp.zeros((self.npix,self.npix))
 
         self.det_rotation = 0
         self.flip_dm = False
@@ -132,7 +133,8 @@ class MODEL():
         # if self.flip_dm: DM_PHASOR = xp.rot90(xp.rot90(DM_PHASOR))
 
         # Initialize the wavefront
-        E_EP = utils.pad_or_crop(self.APERTURE.astype(xp.complex128), self.N) * utils.pad_or_crop(self.WFE, self.N) / xp.sqrt(self.Imax_ref)
+        WFE =  utils.pad_or_crop(self.AMP, self.N) * xp.exp(1j * 2*xp.pi/wavelength * utils.pad_or_crop(self.OPD, self.N))
+        E_EP = utils.pad_or_crop(self.APERTURE.astype(xp.complex128), self.N) * WFE / xp.sqrt(self.Imax_ref)
         if plot: imshows.imshow2(xp.abs(E_EP), xp.angle(E_EP), 'EP WF', npix=1.5*self.npix, cmap2='twilight')
 
         E_DM = E_EP * utils.pad_or_crop(DM_PHASOR, self.N)
@@ -299,9 +301,12 @@ def val_and_grad_bb(del_acts, M, actuators, E_abs, control_mask, waves, r_cond, 
         J_monos[i] = J_mono
         dJ_dA_monos[i] = dJ_dA_mono
 
+    # imshows.imshow1(acts_to_command(dJ_dA_monos[2] - dJ_dA_monos[0], M.dm_mask))
+
     if weights is None: 
         weights = np.array(Nwaves*[1])
         # TODO: implement weights for each wavelength correctly
+
     J_bb = np.sum(J_monos)/Nwaves + r_cond * del_acts_waves.dot(del_acts_waves)
     dJ_dA_bb = np.sum(dJ_dA_monos, axis=0) + ensure_np_array( r_cond * 2*del_acts_waves )
     
