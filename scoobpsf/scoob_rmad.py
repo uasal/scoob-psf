@@ -166,16 +166,16 @@ class MODEL():
         if plot: imshows.imshow2(xp.abs(E_LS), xp.angle(E_LS), 'After Lyot Stop WF', npix=1.5*self.npix, cmap2='twilight')
         
         psf_pixelscale_lamD = self.psf_pixelscale_lamDc * self.wavelength_c/wavelength
-        fpwf = props.mft_forward(E_LS, self.npix * self.lyot_ratio, self.npsf, psf_pixelscale_lamD)
-        fpwf = _scipy.ndimage.rotate(fpwf, self.det_rotation, reshape=False, order=5)
-        if plot: imshows.imshow2(xp.abs(fpwf)**2, xp.angle(fpwf), 'At SCICAM WF', lognorm1=True, cmap2='twilight')
+        E_FP = props.mft_forward(E_LS, self.npix * self.lyot_ratio, self.npsf, psf_pixelscale_lamD)
+        E_FP = _scipy.ndimage.rotate(E_FP, self.det_rotation, reshape=False, order=5)
+        if plot: imshows.imshow2(xp.abs(E_FP)**2, xp.angle(E_FP), 'At SCICAM WF', lognorm1=True, cmap2='twilight')
 
-        if fancy_plot: fancy_plot_forward(dm_command, E_EP, DM_PHASOR, E_LP, fpwf, npix=self.npix, wavelength=wavelength)
-        # command, E_EP, DM_PHASOR, E_LP, LYOT, fpwf, npix=1000, wavelength=633e-9
+        if fancy_plot: fancy_plot_forward(dm_command, E_EP, DM_PHASOR, E_LP, E_FP, npix=self.npix, wavelength=wavelength)
+
         if return_ints:
-            return fpwf, E_EP, DM_PHASOR, E_LP, E_LS
+            return E_FP, E_EP, DM_PHASOR
         else:
-            return fpwf
+            return E_FP
         
     def getattr(self, attr):
         return getattr(self, attr)
@@ -209,24 +209,30 @@ class MODEL():
             im += xp.abs( fpwf )**2 / Nwaves
         return im
 
-def val_and_grad(del_acts, M, actuators, E_ab, control_mask, wavelength, r_cond, verbose=False, plot=False, fancy_plot=False):
+def val_and_grad(del_acts, M, rmad_vars, verbose=False, plot=False, fancy_plot=False):
     # Convert array arguments into correct types
-    actuators = ensure_np_array(actuators)
+    del_acts = xp.array(del_acts)
     del_acts_waves = del_acts/M.wavelength_c
-    E_ab = xp.array(E_ab)
 
-    E_ab_l2norm = E_ab[control_mask].dot(E_ab[control_mask].conjugate()).real
+    current_acts = rmad_vars['current_acts']
+    E_ab = rmad_vars['E_ab']
+    E_FP_NOM = rmad_vars['E_FP_NOM']
+    E_EP = rmad_vars['E_EP']
+    DM_PHASOR = rmad_vars['DM_PHASOR']
+    control_mask = rmad_vars['control_mask']
+    wavelength = rmad_vars['wavelength']
+    r_cond = rmad_vars['r_cond']
 
-    # Compute E_dm using the forward DM model
-    E_FP_NOM, E_EP, DM_PHASOR, _, _ = M.forward(actuators, wavelength, use_vortex=True, return_ints=True) # make sure to do the array indexing
-    E_FP_w_DM = M.forward(actuators + del_acts, wavelength, use_vortex=True) # make sure to do the array indexing
-    E_DM = E_FP_w_DM - E_FP_NOM
+    # Compute E_DM using the forward DM model
+    E_FP_delDM = M.forward(current_acts + del_acts, wavelength, use_vortex=True) # make sure to do the array indexing
+    E_DM = E_FP_delDM - E_FP_NOM
 
     # compute the cost function
     delE = E_ab + E_DM
     delE_vec = delE[control_mask] # make sure to do array indexing
     J_delE = delE_vec.dot(delE_vec.conjugate()).real
     J_c = r_cond * del_acts_waves.dot(del_acts_waves)
+    E_ab_l2norm = E_ab[control_mask].dot(E_ab[control_mask].conjugate()).real
     J = (J_delE + J_c) / E_ab_l2norm
     if verbose: 
         print(f'\tCost-function J_delE: {J_delE:.3f}')
@@ -297,7 +303,6 @@ def val_and_grad_bb(del_acts, M, actuators, E_abs, control_mask, waves, r_cond, 
         wavelength = waves[i]
         E_ab = E_abs[i]
         J_mono, dJ_dA_mono = val_and_grad(del_acts, M, actuators, E_ab, control_mask, wavelength, r_cond_mono, verbose=verbose, plot=plot, fancy_plot=fancy_plot)
-        # print(J_mono, dJ_dA_mono.shape)
         J_monos[i] = J_mono
         dJ_dA_monos[i] = dJ_dA_mono
 
@@ -364,7 +369,7 @@ def fancy_plot_forward(command, E_EP, DM_PHASOR, E_LP, fpwf, npix=1000, waveleng
     ax.set_yticks([])
 
     ax = fig.add_subplot(gs[0, 4])
-    ax.imshow(np.abs(fpwf)**2, cmap='magma', norm=LogNorm(vmin=1e-8))
+    ax.imshow(np.abs(fpwf)**2, cmap='magma', norm=LogNorm(vmin=1e-8, vmax=1e-4))
     ax.set_title('Focal Plane Intensity', fontsize=title_fz)
     ax.set_xticks([])
     ax.set_yticks([])
@@ -392,13 +397,13 @@ def fancy_plot_adjoint(dJ_dE_DM, dJ_dE_LP, dJ_dE_PUP, dJ_dS_DM, dJ_dA, control_m
     title_fz = 26
 
     ax = fig.add_subplot(gs[0, 0])
-    ax.imshow(control_mask * np.abs(dJ_dE_DM)**2, cmap='magma', norm=LogNorm(vmin=1e-5))
+    ax.imshow(np.abs(dJ_dE_DM)**2, cmap='magma', norm=LogNorm(vmin=1e-6))
     ax.set_title(r'$| \frac{\partial J}{\partial E_{DM}} |^2$', fontsize=title_fz)
     ax.set_xticks([])
     ax.set_yticks([])
 
     ax = fig.add_subplot(gs[1, 0])
-    ax.imshow(control_mask * np.angle(dJ_dE_DM), cmap='twilight',)
+    ax.imshow(np.angle(dJ_dE_DM), cmap='twilight',)
     ax.set_title(r'$\angle \frac{\partial J}{\partial E_{DM}} $', fontsize=title_fz)
     ax.set_xticks([])
     ax.set_yticks([])
